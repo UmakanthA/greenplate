@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Green Plate — Vegetarian Calorie Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  body { margin: 0; background: #F1F4EC; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+/* ================================================================== */
+/* CONFIG — paste your Google OAuth Client ID here to enable Drive    */
+/* sync. See README.md for the 5-minute setup.                        */
+/* ================================================================== */
+const GOOGLE_CLIENT_ID = "PASTE_YOUR_CLIENT_ID_HERE.apps.googleusercontent.com";
+const DRIVE_FILE_NAME = "greenplate-data.json";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"; // only files this app creates
+const LS_KEY = "greenplate:data";
+const LS_DRIVE_FLAG = "greenplate:driveEnabled";
+
+/* ------------------------------------------------------------------ */
+/* Food database.                                                      */
+/* unit: "pc" = per piece · "g" = per 100 g · "srv" = per srvName      */
+/* ------------------------------------------------------------------ */
+const FOODS = [
+  { name: "Idli", unit: "pc", per: 1, cal: 60, p: 2, c: 12, f: 0.3, fb: 0.8, vegan: true },
+  { name: "Plain Dosa", unit: "pc", per: 1, cal: 170, p: 4, c: 30, f: 4, fb: 1.5, vegan: true },
+  { name: "Masala Dosa", unit: "pc", per: 1, cal: 300, p: 6, c: 48, f: 9, fb: 3, vegan: true },
+  { name: "Medu Vada", unit: "pc", per: 1, cal: 150, p: 4, c: 14, f: 9, fb: 1.5, vegan: true },
+  { name: "Upma", unit: "srv", srvName: "bowl", per: 1, cal: 230, p: 6, c: 38, f: 7, fb: 3, vegan: true },
+  { name: "Poha", unit: "srv", srvName: "bowl", per: 1, cal: 210, p: 5, c: 40, f: 4, fb: 2.5, vegan: true },
+  { name: "Pongal", unit: "srv", srvName: "bowl", per: 1, cal: 280, p: 8, c: 42, f: 9, fb: 2, vegan: false },
+  { name: "Oats (cooked)", unit: "srv", srvName: "bowl", per: 1, cal: 160, p: 6, c: 27, f: 3, fb: 4, vegan: true },
+  { name: "Dhokla", unit: "pc", per: 1, cal: 70, p: 2.5, c: 11, f: 2, fb: 1, vegan: true },
+  { name: "Chapati / Roti", unit: "pc", per: 1, cal: 100, p: 3, c: 18, f: 2, fb: 2, vegan: true },
+  { name: "Sambar", unit: "srv", srvName: "cup", per: 1, cal: 110, p: 5, c: 16, f: 3, fb: 4, vegan: true },
+  { name: "Rasam", unit: "srv", srvName: "cup", per: 1, cal: 60, p: 2, c: 10, f: 1, fb: 1, vegan: true },
+  { name: "Dal Tadka", unit: "srv", srvName: "cup", per: 1, cal: 180, p: 10, c: 24, f: 5, fb: 6, vegan: true },
+  { name: "Rajma", unit: "srv", srvName: "cup", per: 1, cal: 230, p: 13, c: 36, f: 3, fb: 11, vegan: true },
+  { name: "Chana Masala", unit: "srv", srvName: "cup", per: 1, cal: 250, p: 12, c: 38, f: 6, fb: 10, vegan: true },
+  { name: "Palak Paneer", unit: "srv", srvName: "cup", per: 1, cal: 280, p: 13, c: 10, f: 21, fb: 4, vegan: false },
+  { name: "Curd Rice", unit: "srv", srvName: "bowl", per: 1, cal: 260, p: 8, c: 40, f: 8, fb: 1, vegan: false },
+  { name: "Lemon Rice", unit: "srv", srvName: "bowl", per: 1, cal: 290, p: 5, c: 48, f: 9, fb: 2, vegan: true },
+  { name: "Veg Biryani", unit: "srv", srvName: "plate", per: 1, cal: 420, p: 9, c: 65, f: 14, fb: 6, vegan: true },
+  { name: "Veg Pulao", unit: "srv", srvName: "bowl", per: 1, cal: 310, p: 6, c: 52, f: 9, fb: 5, vegan: true },
+  { name: "White Rice", unit: "srv", srvName: "cup", per: 1, cal: 205, p: 4, c: 45, f: 0.5, fb: 0.6, vegan: true },
+  { name: "Brown Rice", unit: "srv", srvName: "cup", per: 1, cal: 215, p: 5, c: 45, f: 2, fb: 3.5, vegan: true },
+  { name: "Quinoa", unit: "srv", srvName: "cup", per: 1, cal: 220, p: 8, c: 39, f: 4, fb: 5, vegan: true },
+  { name: "Lentil Soup", unit: "srv", srvName: "bowl", per: 1, cal: 160, p: 11, c: 26, f: 2, fb: 8, vegan: true },
+  { name: "Mixed Salad", unit: "srv", srvName: "bowl", per: 1, cal: 80, p: 3, c: 12, f: 3, fb: 4, vegan: true },
+  { name: "Cucumber Raita", unit: "srv", srvName: "cup", per: 1, cal: 90, p: 4, c: 8, f: 5, fb: 1, vegan: false },
+  { name: "Paneer", unit: "g", per: 100, cal: 265, p: 18, c: 4, f: 21, fb: 0, vegan: false },
+  { name: "Paneer Tikka", unit: "g", per: 100, cal: 270, p: 18, c: 6, f: 19, fb: 1, vegan: false },
+  { name: "Tofu", unit: "g", per: 100, cal: 87, p: 10, c: 2, f: 5, fb: 1, vegan: true },
+  { name: "Tempeh", unit: "g", per: 100, cal: 195, p: 20, c: 8, f: 11, fb: 5, vegan: true },
+  { name: "Greek Yogurt", unit: "g", per: 100, cal: 59, p: 10, c: 3.6, f: 0.4, fb: 0, vegan: false },
+  { name: "Edamame", unit: "g", per: 100, cal: 121, p: 11, c: 9, f: 5, fb: 5, vegan: true },
+  { name: "Moong Sprouts", unit: "g", per: 100, cal: 30, p: 3, c: 6, f: 0.2, fb: 2, vegan: true },
+  { name: "Roasted Chana", unit: "g", per: 100, cal: 367, p: 19, c: 61, f: 6, fb: 17, vegan: true },
+  { name: "Banana", unit: "pc", per: 1, cal: 105, p: 1, c: 27, f: 0.4, fb: 3, vegan: true },
+  { name: "Apple", unit: "pc", per: 1, cal: 95, p: 0.5, c: 25, f: 0.3, fb: 4.5, vegan: true },
+  { name: "Orange", unit: "pc", per: 1, cal: 62, p: 1, c: 15, f: 0.2, fb: 3, vegan: true },
+  { name: "Almonds", unit: "pc", per: 1, cal: 7, p: 0.26, c: 0.25, f: 0.6, fb: 0.15, vegan: true },
+  { name: "Peanut Butter", unit: "srv", srvName: "tbsp", per: 1, cal: 95, p: 4, c: 3, f: 8, fb: 1, vegan: true },
+  { name: "Peanut Chutney", unit: "srv", srvName: "tbsp", per: 1, cal: 45, p: 2, c: 2, f: 3.5, fb: 1, vegan: true },
+  { name: "Plant Protein Shake", unit: "srv", srvName: "scoop", per: 1, cal: 140, p: 24, c: 5, f: 2, fb: 2, vegan: true },
+  { name: "Whey Protein Shake", unit: "srv", srvName: "scoop", per: 1, cal: 130, p: 25, c: 4, f: 2, fb: 0, vegan: false },
+  { name: "Soy Milk", unit: "srv", srvName: "glass", per: 1, cal: 100, p: 7, c: 8, f: 4, fb: 1, vegan: true },
+  { name: "Masala Chai", unit: "srv", srvName: "cup", per: 1, cal: 90, p: 2, c: 12, f: 3, fb: 0, vegan: false },
+  { name: "Black Coffee", unit: "srv", srvName: "cup", per: 1, cal: 5, p: 0, c: 1, f: 0, fb: 0, vegan: true },
+  { name: "Coconut Water", unit: "srv", srvName: "glass", per: 1, cal: 45, p: 0, c: 11, f: 0, fb: 0, vegan: true },
+];
+
+const MEALS = [
+  { id: "breakfast", label: "Breakfast", share: 0.25 },
+  { id: "lunch", label: "Lunch", share: 0.35 },
+  { id: "snacks", label: "Snacks", share: 0.1 },
+  { id: "dinner", label: "Dinner", share: 0.3 },
+];
+
+const defaultMealNow = () => {
+  const h = new Date().getHours();
+  if (h < 11) return "breakfast";
+  if (h < 15) return "lunch";
+  if (h < 18) return "snacks";
+  return "dinner";
+};
+
+const unitLabel = (food) => (food.unit === "pc" ? "pc" : food.unit === "g" ? "g" : food.srvName);
+const perLabel = (food) => (food.unit === "g" ? "100 g" : `1 ${unitLabel(food)}`);
+const todayKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const r1 = (n) => Math.round(n * 10) / 10;
+
+/* ------------------------------------------------------------------ */
+/* Local persistence                                                   */
+/* ------------------------------------------------------------------ */
+const loadLocal = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || null; } catch (e) { return null; } };
+const saveLocal = (d) => { try { localStorage.setItem(LS_KEY, JSON.stringify(d)); } catch (e) {} };
+
+/* ------------------------------------------------------------------ */
+/* Google Drive sync (REST API + Google Identity Services)             */
+/* ------------------------------------------------------------------ */
+async function driveFindFile(token) {
+  const q = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!r.ok) throw new Error(`Drive list failed: ${r.status}`);
+  const j = await r.json();
+  return j.files && j.files.length ? j.files[0] : null;
+}
+
+async function driveCreateFile(token, content) {
+  const boundary = "gp_boundary_" + Date.now();
+  const body =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+    JSON.stringify({ name: DRIVE_FILE_NAME, mimeType: "application/json" }) +
+    `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
+    JSON.stringify(content) +
+    `\r\n--${boundary}--`;
+  const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  if (!r.ok) throw new Error(`Drive create failed: ${r.status}`);
+  return (await r.json()).id;
+}
+
+async function driveUpdateFile(token, fileId, content) {
+  const r = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(content),
+  });
+  if (!r.ok) throw new Error(`Drive update failed: ${r.status}`);
+}
+
+async function driveReadFile(token, fileId) {
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!r.ok) throw new Error(`Drive read failed: ${r.status}`);
+  return r.json();
+}
+
+/* ------------------------------------------------------------------ */
+/* Calorie recommendation — Mifflin-St Jeor                            */
+/* ------------------------------------------------------------------ */
+const ACTIVITY = {
+  sedentary: { factor: 1.2, label: "Sedentary (desk job, little exercise)" },
+  light: { factor: 1.375, label: "Light (exercise 1–3 days/week)" },
+  moderate: { factor: 1.55, label: "Moderate (exercise 3–5 days/week)" },
+  active: { factor: 1.725, label: "Active (daily running + gym)" },
+};
+const TARGETS = {
+  lose: { adj: -500, label: "Lose weight (~0.5 kg/week)" },
+  maintain: { adj: 0, label: "Maintain weight" },
+  gain: { adj: 300, label: "Gain muscle (lean bulk)" },
+};
+
+// Protein target g/kg by goal — grounded in Morton 2018 & Nunes meta-analyses.
+// Maintain/gain: ~1.6–1.8 g/kg (plateau of muscle benefit). Fat loss: ~2.2 g/kg
+// to preserve lean mass in a deficit (2.3–3.1 g/kg range in the literature).
+const PROTEIN_PER_KG = { lose: 2.2, maintain: 1.6, gain: 1.8 };
+
+function calcPlan(p) {
+  const h = parseFloat(p.heightCm), w = parseFloat(p.weightKg), a = parseInt(p.age, 10);
+  if (!h || !w || !a || h < 100 || h > 250 || w < 30 || w > 250 || a < 15 || a > 100) return null;
+  const bmr = Math.round(10 * w + 6.25 * h - 5 * a + (p.sex === "male" ? 5 : -161));
+  const tdee = Math.round(bmr * ACTIVITY[p.activity].factor);
+  const recommended = Math.max(tdee + TARGETS[p.target].adj, 1200);
+  const gPerKg = PROTEIN_PER_KG[p.target] || 1.6;
+  return { bmr, tdee, recommended, protein: Math.round(w * gPerKg), gPerKg };
+}
+
+/* ------------------------------------------------------------------ */
+/* Adaptive daily budget — rolls last 7 days' surplus/deficit forward. */
+/* If you banked calories yesterday you get a little more today, and   */
+/* vice-versa, nudged gently (±20% cap) toward your weekly average.    */
+/* ------------------------------------------------------------------ */
+function adaptiveBudget(baseGoal, allLogs, todayDate) {
+  const dayTotal = (d) => (allLogs[d] || []).reduce((s, x) => s + x.cal, 0);
+  const dates = [];
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(todayDate + "T12:00:00");
+    d.setDate(d.getDate() - i);
+    dates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+  }
+  const logged = dates.filter((d) => (allLogs[d] || []).length > 0);
+  if (logged.length === 0) return { budget: baseGoal, cumDelta: 0, daysUsed: 0 };
+  // cumulative surplus(+)/deficit(-) over logged days
+  const cumDelta = logged.reduce((s, d) => s + (dayTotal(d) - baseGoal), 0);
+  // spread the correction over the coming week, cap the daily nudge
+  const rawAdjust = -cumDelta / 7;
+  const cap = baseGoal * 0.2;
+  const adjust = Math.max(Math.min(rawAdjust, cap), -cap);
+  return { budget: Math.round(baseGoal + adjust), cumDelta: Math.round(cumDelta), daysUsed: logged.length, adjust: Math.round(adjust) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Fasting guidance — early time-restricted eating (16:8).             */
+/* Evidence: TRE helps metabolic health mainly when the window is      */
+/* earlier in the day; evening-loaded windows fare worse.              */
+/* ------------------------------------------------------------------ */
+function fastingAdvice(log, remaining, goal, target) {
+  const now = new Date();
+  const hour = now.getHours() + now.getMinutes() / 60;
+  const eaten = goal - remaining;
+  const pctEaten = goal > 0 ? eaten / goal : 0;
+  // Recommend an early window: first meal ~9–10am, last calories by ~6pm.
+  const windowStart = 9, windowEnd = 18; // 9h span, close enough to 16:8 with a morning coffee
+  let status, tip, tone = "neutral";
+
+  if (target === "gain") {
+    return {
+      title: "Fasting: optional for your goal",
+      status: "You're in a muscle-gain phase, so a tight fast can make hitting protein and calories harder.",
+      tip: "If you still want the metabolic perks, keep a gentle 12:12 (e.g. finish dinner by 8pm, break fast at 8am) rather than a long fast.",
+      tone: "neutral",
+    };
+  }
+
+  if (hour < windowStart) {
+    status = `Still in your overnight fast (${Math.round(windowStart - hour)}h to your window).`;
+    tip = "Black coffee, water, or plain tea are fine now. Aim to open your eating window around 9–10am and front-load the day.";
+    tone = "good";
+  } else if (hour <= 14) {
+    status = "Prime eating window — earlier calories align with your circadian clock.";
+    tip = pctEaten < 0.35
+      ? "Good time for a solid, protein-forward meal while your window is wide open."
+      : "Nicely on track. Keep the bigger meals earlier rather than saving them all for tonight.";
+    tone = "good";
+  } else if (hour <= windowEnd) {
+    const hrsLeft = Math.round(windowEnd - hour);
+    status = `About ${hrsLeft}h left in an early 16:8 window (aim to finish calories by ~6pm).`;
+    tip = remaining > goal * 0.4
+      ? `You still have ${Math.round(remaining)} kcal but not much window — eat your main meal now rather than late.`
+      : "You're pacing well. Wrap up eating in the next couple hours to bank the overnight fast.";
+    tone = remaining > goal * 0.4 ? "warn" : "good";
+  } else {
+    status = "Past ~6pm — the ideal early window has closed.";
+    tip = remaining > 250
+      ? `You have ${Math.round(remaining)} kcal left. If you eat, keep it light and high-protein (tofu, dal, a shake) rather than carb-heavy, and start your fast after.`
+      : "You're near your goal — a good point to stop eating and begin your ~16h overnight fast.";
+    tone = "warn";
+  }
+  return { title: "Fasting window (early 16:8)", status, tip, tone };
+}
+
+/* ------------------------------------------------------------------ */
+/* Suggestion engine — protein- and fiber-aware                        */
+/* ------------------------------------------------------------------ */
+function getSuggestions(mode, remaining, proteinGap, fiberGap, log) {
+  const eaten = new Set(log.map((l) => l.name));
+  let pool = FOODS.filter((f) => (mode === "vegan" ? f.vegan : true));
+  if (remaining <= 0)
+    return { list: [], note: "You've hit your calorie goal for today. Water, black coffee, or rasam if you need something warm." };
+
+  pool = pool.filter((f) => f.cal <= remaining + 30 && f.cal >= 30);
+  const needProtein = proteinGap > 12;
+  const needFiber = fiberGap > 8;
+  const lightDay = remaining < 250;
+
+  const scored = pool.map((f) => {
+    let score = 0;
+    const pDensity = f.p / Math.max(f.cal, 1);
+    const fbDensity = f.fb / Math.max(f.cal, 1);
+    score += pDensity * (needProtein ? 400 : 120);
+    score += fbDensity * (needFiber ? 900 : 200);
+    if (lightDay && f.cal <= remaining) score += 40;
+    if (eaten.has(f.name)) score -= 60;
+    score += (1 - Math.abs(f.cal - Math.min(remaining, 350)) / 400) * 25;
+    return { ...f, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const list = scored.slice(0, 4).map((f) => ({
+    ...f,
+    reason:
+      needProtein && f.p >= 8
+        ? `${f.p}g protein per ${perLabel(f)} — you're ${proteinGap}g short`
+        : needFiber && f.fb >= 4
+        ? `${f.fb}g fiber per ${perLabel(f)} — you're ${fiberGap}g short`
+        : lightDay
+        ? `Light at ${f.cal} kcal — fits your remaining budget`
+        : `Balanced pick, leaves ${remaining - f.cal} kcal to spare`,
+  }));
+
+  const note = needProtein
+    ? `Protein is running behind (${proteinGap}g to go)${needFiber ? ` and fiber too (${fiberGap}g)` : ""}, so these lean that way.`
+    : needFiber
+    ? `Fiber is running behind (${fiberGap}g to go) — these picks help close the gap.`
+    : lightDay
+    ? "Not much room left — keeping these light."
+    : "You have room for a proper meal. Picks below keep the day balanced.";
+
+  return { list, note };
+}
+
+/* ------------------------------------------------------------------ */
+/* Gauge                                                               */
+/* ------------------------------------------------------------------ */
+function Gauge({ goal, consumed }) {
+  const pct = Math.min(consumed / Math.max(goal, 1), 1);
+  const over = consumed > goal;
+  const R = 130, CX = 160, CY = 155;
+  const start = Math.PI, end = 0;
+  const angle = start - pct * Math.PI;
+  const arc = (a0, a1, r) => {
+    const x0 = CX + r * Math.cos(a0), y0 = CY - r * Math.sin(a0);
+    const x1 = CX + r * Math.cos(a1), y1 = CY - r * Math.sin(a1);
+    const large = a0 - a1 > Math.PI ? 1 : 0;
+    return `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1}`;
+  };
+  const ticks = [];
+  for (let i = 0; i <= 20; i++) {
+    const a = start - (i / 20) * Math.PI;
+    const long = i % 5 === 0;
+    const ra = R + 10, rb = R + (long ? 24 : 17);
+    ticks.push(
+      <line key={i}
+        x1={CX + ra * Math.cos(a)} y1={CY - ra * Math.sin(a)}
+        x2={CX + rb * Math.cos(a)} y2={CY - rb * Math.sin(a)}
+        stroke="#B9C6B4" strokeWidth={long ? 2 : 1} />
+    );
+  }
+  const remaining = goal - consumed;
+  return (
+    <svg viewBox="0 0 320 190" style={{ width: "100%", maxWidth: 400, display: "block", margin: "0 auto" }}>
+      {ticks}
+      <path d={arc(start, end, R)} fill="none" stroke="#E3E9DE" strokeWidth="16" strokeLinecap="round" />
+      {pct > 0.01 && (
+        <path d={arc(start, angle, R)} fill="none" stroke={over ? "#C25E3A" : "url(#gaugeGrad)"} strokeWidth="16" strokeLinecap="round" />
+      )}
+      <defs>
+        <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#2C5E3F" />
+          <stop offset="100%" stopColor="#E9A23B" />
+        </linearGradient>
+      </defs>
+      <text x={CX} y={CY - 34} textAnchor="middle" style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 800, fontSize: 54, fill: over ? "#C25E3A" : "#182420" }}>
+        {Math.abs(Math.round(remaining))}
+      </text>
+      <text x={CX} y={CY - 8} textAnchor="middle" style={{ fontFamily: "Inter, sans-serif", fontSize: 13, letterSpacing: 2, fill: "#5C6B5E", textTransform: "uppercase" }}>
+        {over ? "kcal over" : "kcal left"}
+      </text>
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Weight chart — actual vs expected trajectory                        */
+/* ------------------------------------------------------------------ */
+function WeightChart({ weights, target, unit }) {
+  if (weights.length < 2) return null;
+  const W = 560, H = 200, PAD = { l: 44, r: 14, t: 14, b: 26 };
+  const toUnit = (kg) => (unit === "kg" ? kg : kg * 2.2046);
+  const days = (d) => new Date(d + "T12:00:00").getTime() / 86400000;
+
+  const x0 = days(weights[0].date), x1 = days(weights[weights.length - 1].date);
+  const span = Math.max(x1 - x0, 1);
+  const slopePerDay = target === "lose" ? -0.5 / 7 : target === "gain" ? 0.25 / 7 : 0;
+  const expected = weights.map((w) => ({ date: w.date, kg: weights[0].kg + slopePerDay * (days(w.date) - x0) }));
+
+  const allVals = [...weights.map((w) => toUnit(w.kg)), ...expected.map((w) => toUnit(w.kg))];
+  let yMin = Math.min(...allVals), yMax = Math.max(...allVals);
+  const padY = Math.max((yMax - yMin) * 0.2, unit === "kg" ? 0.5 : 1);
+  yMin -= padY; yMax += padY;
+
+  const X = (d) => PAD.l + ((days(d) - x0) / span) * (W - PAD.l - PAD.r);
+  const Y = (v) => H - PAD.b - ((v - yMin) / (yMax - yMin)) * (H - PAD.t - PAD.b);
+  const pts = (arr) => arr.map((w) => `${X(w.date)},${Y(toUnit(w.kg))}`).join(" ");
+  const fmt = (v) => (unit === "kg" ? v.toFixed(1) : Math.round(v));
+  const dateLabel = (d) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  const grid = [];
+  for (let i = 0; i <= 3; i++) {
+    const v = yMin + ((yMax - yMin) * i) / 3;
+    grid.push(
+      <g key={i}>
+        <line x1={PAD.l} y1={Y(v)} x2={W - PAD.r} y2={Y(v)} stroke="#EDF1EA" strokeWidth="1" />
+        <text x={PAD.l - 6} y={Y(v) + 4} textAnchor="end" style={{ fontSize: 11, fill: "#8FA88A", fontFamily: "Inter, sans-serif" }}>{fmt(v)}</text>
+      </g>
+    );
+  }
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+      {grid}
+      {slopePerDay !== 0 && <polyline points={pts(expected)} fill="none" stroke="#E9A23B" strokeWidth="2" strokeDasharray="6 5" />}
+      <polyline points={pts(weights)} fill="none" stroke="#2C5E3F" strokeWidth="2.5" strokeLinejoin="round" />
+      {weights.map((w) => (
+        <circle key={w.date} cx={X(w.date)} cy={Y(toUnit(w.kg))} r="4" fill="#2C5E3F" stroke="#fff" strokeWidth="1.5" />
+      ))}
+      <text x={PAD.l} y={H - 8} style={{ fontSize: 11, fill: "#8FA88A", fontFamily: "Inter, sans-serif" }}>{dateLabel(weights[0].date)}</text>
+      <text x={W - PAD.r} y={H - 8} textAnchor="end" style={{ fontSize: 11, fill: "#8FA88A", fontFamily: "Inter, sans-serif" }}>{dateLabel(weights[weights.length - 1].date)}</text>
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Main app                                                            */
+/* ------------------------------------------------------------------ */
+function VegCalorieTracker() {
+  const [goal, setGoal] = useState(2000);
+  const [mode, setMode] = useState("vegetarian");
+  const [allLogs, setAllLogs] = useState({}); // { 'YYYY-MM-DD': [entries] }
+  const [query, setQuery] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [pending, setPending] = useState(null);
+  const [custom, setCustom] = useState({ name: "", cal: "", p: "", fb: "" });
+  const [showCustom, setShowCustom] = useState(false);
+  const [product, setProduct] = useState({ name: "", cal: "", p: "", fb: "", qty: 1, meal: "" });
+  const [showProduct, setShowProduct] = useState(false);
+  const [profile, setProfile] = useState({ heightCm: "", weightKg: "", age: "", sex: "male", activity: "moderate", target: "maintain", fasting: true });
+  const [showProfile, setShowProfile] = useState(false);
+  const [units, setUnits] = useState({ height: "cm", weight: "kg" });
+  const [weights, setWeights] = useState([]);
+  const [weightInput, setWeightInput] = useState("");
+  const [drive, setDrive] = useState({ connected: false, syncing: false, lastSync: null, error: null });
+
+  const date = todayKey();
+  const log = allLogs[date] || [];
+  const setLog = (fn) => setAllLogs((all) => ({ ...all, [date]: typeof fn === "function" ? fn(all[date] || []) : fn }));
+
+  const tokenRef = useRef(null);
+  const fileIdRef = useRef(null);
+  const tokenClientRef = useRef(null);
+  const pushTimerRef = useRef(null);
+  const skipNextPushRef = useRef(false);
+
+  const clientIdConfigured = GOOGLE_CLIENT_ID && !GOOGLE_CLIENT_ID.startsWith("PASTE_");
+
+  /* ---------- Load local data on start ---------- */
+  useEffect(() => {
+    const d = loadLocal();
+    if (d) {
+      applyBlob(d);
+    } else {
+      setShowProfile(true);
+    }
+    setLoaded(true);
+    // If the user enabled Drive before, try a silent reconnect once GIS loads
+    if (clientIdConfigured && localStorage.getItem(LS_DRIVE_FLAG) === "1") {
+      const iv = setInterval(() => {
+        if (window.google?.accounts?.oauth2) {
+          clearInterval(iv);
+          initTokenClient();
+          tokenClientRef.current?.requestAccessToken({ prompt: "" });
+        }
+      }, 300);
+      setTimeout(() => clearInterval(iv), 8000);
+    }
+  }, []);
+
+  const assembleBlob = () => ({
+    settings: { goal, mode, profile },
+    logs: allLogs,
+    weights,
+    updatedAt: Date.now(),
+  });
+
+  function applyBlob(d) {
+    skipNextPushRef.current = true;
+    if (d.settings) {
+      if (d.settings.goal) setGoal(d.settings.goal);
+      if (d.settings.mode) setMode(d.settings.mode);
+      if (d.settings.profile) setProfile(d.settings.profile);
+    }
+    if (d.logs) setAllLogs(d.logs);
+    if (d.weights) setWeights(d.weights);
+  }
+
+  /* ---------- Persist locally + schedule Drive push on any change ---------- */
+  useEffect(() => {
+    if (!loaded) return;
+    const blob = assembleBlob();
+    saveLocal(blob);
+    if (skipNextPushRef.current) { skipNextPushRef.current = false; return; }
+    if (drive.connected && tokenRef.current) {
+      clearTimeout(pushTimerRef.current);
+      pushTimerRef.current = setTimeout(() => pushToDrive(blob), 2000);
+    }
+  }, [goal, mode, profile, allLogs, weights, loaded]);
+
+  /* ---------- Google Drive ---------- */
+  function initTokenClient() {
+    if (tokenClientRef.current || !window.google?.accounts?.oauth2) return;
+    tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: async (resp) => {
+        if (resp.error) {
+          setDrive((s) => ({ ...s, error: "Google sign-in failed", syncing: false }));
+          return;
+        }
+        tokenRef.current = resp.access_token;
+        localStorage.setItem(LS_DRIVE_FLAG, "1");
+        await initialSync();
+      },
+    });
+  }
+
+  function connectDrive() {
+    if (!clientIdConfigured) return;
+    initTokenClient();
+    setDrive((s) => ({ ...s, error: null }));
+    tokenClientRef.current?.requestAccessToken({ prompt: localStorage.getItem(LS_DRIVE_FLAG) === "1" ? "" : "consent" });
+  }
+
+  function disconnectDrive() {
+    tokenRef.current = null;
+    fileIdRef.current = null;
+    localStorage.removeItem(LS_DRIVE_FLAG);
+    setDrive({ connected: false, syncing: false, lastSync: null, error: null });
+  }
+
+  async function initialSync() {
+    setDrive((s) => ({ ...s, syncing: true, error: null }));
+    try {
+      const token = tokenRef.current;
+      let file = await driveFindFile(token);
+      const local = loadLocal() || assembleBlob();
+      if (!file) {
+        fileIdRef.current = await driveCreateFile(token, local);
+      } else {
+        fileIdRef.current = file.id;
+        const remote = await driveReadFile(token, file.id);
+        if (remote && (remote.updatedAt || 0) > (local.updatedAt || 0)) {
+          applyBlob(remote);      // Drive is newer → pull
+          saveLocal(remote);
+        } else {
+          await driveUpdateFile(token, file.id, local); // local is newer → push
+        }
+      }
+      setDrive({ connected: true, syncing: false, lastSync: new Date(), error: null });
+    } catch (e) {
+      setDrive((s) => ({ ...s, syncing: false, error: "Sync failed — try reconnecting." }));
+    }
+  }
+
+  async function pushToDrive(blob) {
+    if (!tokenRef.current || !fileIdRef.current) return;
+    setDrive((s) => ({ ...s, syncing: true }));
+    try {
+      await driveUpdateFile(tokenRef.current, fileIdRef.current, blob);
+      setDrive((s) => ({ ...s, syncing: false, lastSync: new Date(), error: null }));
+    } catch (e) {
+      // Token likely expired — try one silent refresh, otherwise surface it
+      setDrive((s) => ({ ...s, syncing: false, error: "Session expired — tap Sync now to reconnect." }));
+      tokenRef.current = null;
+      setDrive((s) => ({ ...s, connected: false }));
+    }
+  }
+
+  const syncNow = () => {
+    if (tokenRef.current && fileIdRef.current) pushToDrive(assembleBlob());
+    else connectDrive();
+  };
+
+  /* ---------- Derived values ---------- */
+  const totals = useMemo(
+    () => log.reduce((t, x) => ({ cal: t.cal + x.cal, p: t.p + x.p, c: t.c + x.c, f: t.f + x.f, fb: t.fb + (x.fb || 0) }), { cal: 0, p: 0, c: 0, f: 0, fb: 0 }),
+    [log]
+  );
+  const plan = useMemo(() => calcPlan(profile), [profile]);
+  // Adaptive budget: today's goal nudged by the last 7 days' surplus/deficit.
+  const adaptive = useMemo(() => adaptiveBudget(goal, allLogs, date), [goal, allLogs, date]);
+  const todayBudget = adaptive.budget;
+  const remaining = todayBudget - totals.cal;
+  const proteinTarget = plan ? plan.protein : Math.round((goal * 0.25) / 4);
+  const fiberTarget = Math.round((todayBudget / 1000) * 14);
+  const proteinGap = Math.max(Math.round(proteinTarget - totals.p), 0);
+  const fiberGap = Math.max(Math.round(fiberTarget - totals.fb), 0);
+  const fasting = useMemo(
+    () => (profile.fasting ? fastingAdvice(log, remaining, todayBudget, profile.target) : null),
+    [log, remaining, todayBudget, profile.fasting, profile.target]
+  );
+
+  const mealTotals = useMemo(() => {
+    const t = {};
+    MEALS.forEach((m) => (t[m.id] = 0));
+    log.forEach((x) => { t[x.meal] = (t[x.meal] || 0) + x.cal; });
+    return t;
+  }, [log]);
+
+  const { list: suggestions, note } = useMemo(
+    () => getSuggestions(mode, remaining, proteinGap, fiberGap, log),
+    [mode, remaining, proteinGap, fiberGap, log]
+  );
+
+  const results = useMemo(() => {
+    if (!query.trim()) return [];
+    const q = query.toLowerCase();
+    return FOODS.filter((f) => (mode === "vegan" ? f.vegan : true) && f.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [query, mode]);
+
+  const scale = (food, qty) => {
+    const k = qty / food.per;
+    return { cal: Math.round(food.cal * k), p: r1(food.p * k), c: r1(food.c * k), f: r1(food.f * k), fb: r1(food.fb * k) };
+  };
+
+  const startAdd = (food) => {
+    setPending({ food, qty: food.unit === "g" ? 100 : food.unit === "pc" && food.name === "Idli" ? 2 : 1, meal: defaultMealNow() });
+    setQuery("");
+  };
+
+  const confirmAdd = () => {
+    if (!pending || !pending.qty || pending.qty <= 0) return;
+    const { food, qty, meal } = pending;
+    const s = scale(food, qty);
+    const qtyLabel = food.unit === "g" ? `${qty} g` : `${qty} ${unitLabel(food)}${qty > 1 && food.unit === "pc" ? "s" : ""}`;
+    setLog((l) => [...l, { name: food.name, qtyLabel, meal, ...s, id: Date.now() + Math.random() }]);
+    setPending(null);
+  };
+
+  const addCustom = () => {
+    const cal = parseInt(custom.cal, 10);
+    if (!custom.name.trim() || !cal || cal <= 0) return;
+    setLog((l) => [...l, {
+      name: custom.name.trim(), qtyLabel: "1 serving", meal: defaultMealNow(),
+      cal, p: parseFloat(custom.p) || 0, c: 0, f: 0, fb: parseFloat(custom.fb) || 0,
+      id: Date.now() + Math.random(),
+    }]);
+    setCustom({ name: "", cal: "", p: "", fb: "" });
+    setShowCustom(false);
+  };
+
+  const addProduct = () => {
+    const calPer = parseFloat(product.cal), pPer = parseFloat(product.p);
+    const qty = product.qty || 1;
+    if (!product.name.trim() || !calPer || calPer <= 0) return;
+    const meal = product.meal || defaultMealNow();
+    setLog((l) => [...l, {
+      name: product.name.trim(),
+      qtyLabel: `${qty} serving${qty !== 1 ? "s" : ""}`,
+      meal,
+      cal: Math.round(calPer * qty),
+      p: r1((pPer || 0) * qty),
+      c: 0, f: 0,
+      fb: r1((parseFloat(product.fb) || 0) * qty),
+      id: Date.now() + Math.random(),
+    }]);
+    setProduct({ name: "", cal: "", p: "", fb: "", qty: 1, meal: "" });
+    setShowProduct(false);
+  };
+
+  const removeFood = (id) => setLog((l) => l.filter((x) => x.id !== id));
+
+  const logWeight = () => {
+    const v = parseFloat(weightInput);
+    if (!v || v <= 0) return;
+    const kg = Math.round((units.weight === "kg" ? v : v / 2.2046) * 10) / 10;
+    if (kg < 30 || kg > 250) return;
+    setWeights((w) => {
+      const next = w.filter((x) => x.date !== date);
+      next.push({ date, kg });
+      next.sort((a, b) => (a.date < b.date ? -1 : 1));
+      return next;
+    });
+    setProfile((p) => ({ ...p, weightKg: String(kg) }));
+    setWeightInput("");
+  };
+
+  const removeWeight = (d) => setWeights((w) => w.filter((x) => x.date !== d));
+
+  const maxFit = useMemo(() => {
+    if (!pending || remaining <= 0) return null;
+    const perUnitCal = pending.food.cal / pending.food.per;
+    if (pending.food.unit === "g") {
+      const g = Math.floor(remaining / perUnitCal / 10) * 10;
+      return g >= 10 ? `${g} g` : null;
+    }
+    const n = Math.floor(remaining / perUnitCal);
+    return n >= 1 ? `${n} ${unitLabel(pending.food)}${n > 1 && pending.food.unit === "pc" ? "s" : ""}` : null;
+  }, [pending, remaining]);
+
+  const macroBar = (label, val, target, color) => (
+    <div style={{ flex: 1, minWidth: 90 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#5C6B5E", marginBottom: 4 }}>
+        <span style={{ fontWeight: 600, color: "#182420" }}>{label}</span>
+        <span>{r1(val)}g{target ? ` / ${target}g` : ""}</span>
+      </div>
+      <div style={{ height: 6, background: "#E3E9DE", borderRadius: 3 }}>
+        <div style={{ height: 6, width: `${Math.min((val / (target || val || 1)) * 100, 100)}%`, background: color, borderRadius: 3, transition: "width .3s" }} />
+      </div>
+    </div>
+  );
+
+  const S = {
+    page: { minHeight: "100vh", background: "#F1F4EC", fontFamily: "Inter, sans-serif", color: "#182420", padding: "20px 16px 60px" },
+    wrap: { maxWidth: 640, margin: "0 auto" },
+    card: { background: "#FFFFFF", border: "1px solid #DFE7DA", borderRadius: 16, padding: 20, marginBottom: 16 },
+    h1: { fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 800, fontSize: 26, margin: 0, letterSpacing: -0.5 },
+    label: { fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: "#5C6B5E", fontWeight: 600 },
+    btn: { border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "Inter, sans-serif" },
+    input: { width: "100%", boxSizing: "border-box", padding: "12px 14px", borderRadius: 10, border: "1px solid #C9D5C3", fontSize: 15, fontFamily: "Inter, sans-serif", background: "#FBFCF9", outline: "none" },
+    chip: (active) => ({ border: "1px solid " + (active ? "#2C5E3F" : "#C9D5C3"), borderRadius: 20, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", background: active ? "#2C5E3F" : "#FBFCF9", color: active ? "#fff" : "#5C6B5E", fontFamily: "Inter, sans-serif" }),
+  };
+
+  const timeStr = (d) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+  return (
+    <div style={S.page}>
+      <div style={S.wrap}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <h1 style={S.h1}>Green Plate</h1>
+            <div style={{ fontSize: 13, color: "#5C6B5E" }}>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</div>
+          </div>
+          <div style={{ display: "flex", background: "#E3E9DE", borderRadius: 10, padding: 3 }}>
+            {["vegetarian", "vegan"].map((m) => (
+              <button key={m} onClick={() => setMode(m)} style={{ ...S.btn, padding: "8px 14px", background: mode === m ? "#2C5E3F" : "transparent", color: mode === m ? "#fff" : "#5C6B5E" }}>
+                {m === "vegetarian" ? "Vegetarian" : "Vegan"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Drive sync strip */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, fontSize: 13, color: "#5C6B5E", flexWrap: "wrap" }}>
+          <span style={{ width: 8, height: 8, borderRadius: 4, background: drive.connected ? "#2C5E3F" : "#B9C6B4", display: "inline-block" }} />
+          {!clientIdConfigured ? (
+            <span>Saving on this device. To enable Google Drive sync, add your Client ID in index.html (see README).</span>
+          ) : drive.connected ? (
+            <>
+              <span>{drive.syncing ? "Syncing to Drive…" : drive.lastSync ? `Synced to your Drive at ${timeStr(drive.lastSync)}` : "Connected to Drive"}</span>
+              <button onClick={syncNow} style={{ ...S.btn, padding: "4px 8px", background: "transparent", color: "#2C5E3F" }}>Sync now</button>
+              <button onClick={disconnectDrive} style={{ ...S.btn, padding: "4px 8px", background: "transparent", color: "#8FA88A" }}>Disconnect</button>
+            </>
+          ) : (
+            <>
+              <span>Saving on this device only.</span>
+              <button onClick={connectDrive} style={{ ...S.btn, padding: "6px 12px", background: "#2C5E3F", color: "#fff" }}>Connect Google Drive</button>
+            </>
+          )}
+          {drive.error && <span style={{ color: "#C25E3A" }}>{drive.error}</span>}
+        </div>
+
+        {/* Gauge card */}
+        <div style={S.card}>
+          <Gauge goal={todayBudget} consumed={totals.cal} />
+          <div style={{ display: "flex", justifyContent: "center", gap: 24, marginTop: 8, fontSize: 13, color: "#5C6B5E", flexWrap: "wrap" }}>
+            <span>Eaten <b style={{ color: "#182420" }}>{totals.cal}</b></span>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              Base goal
+              <input type="number" value={goal}
+                onChange={(e) => setGoal(Math.max(parseInt(e.target.value, 10) || 0, 0))}
+                style={{ width: 70, padding: "4px 8px", borderRadius: 8, border: "1px solid #C9D5C3", fontWeight: 600, fontFamily: "Inter, sans-serif" }}
+                aria-label="Daily calorie goal" />
+              kcal
+            </span>
+          </div>
+          {adaptive.daysUsed > 0 && adaptive.adjust !== 0 && (
+            <div style={{ textAlign: "center", fontSize: 12, marginTop: 8, color: adaptive.adjust > 0 ? "#2C5E3F" : "#C25E3A" }}>
+              {adaptive.adjust > 0
+                ? `You ran a deficit recently, so today's budget is +${adaptive.adjust} → ${todayBudget} kcal.`
+                : `You ran over recently, so today's budget is ${adaptive.adjust} → ${todayBudget} kcal.`}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 14, marginTop: 20, flexWrap: "wrap" }}>
+            {macroBar("Protein", totals.p, proteinTarget, "#2C5E3F")}
+            {macroBar("Carbs", totals.c, Math.round((todayBudget * 0.5) / 4), "#E9A23B")}
+            {macroBar("Fat", totals.f, Math.round((todayBudget * 0.25) / 9), "#8FA88A")}
+            {macroBar("Fiber", totals.fb, fiberTarget, "#7A5C3E")}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
+            {MEALS.map((m) => {
+              const budget = Math.round(todayBudget * m.share);
+              const used = Math.round(mealTotals[m.id] || 0);
+              const left = budget - used;
+              return (
+                <div key={m.id} style={{ flex: 1, minWidth: 120, background: "#F4F7F0", borderRadius: 10, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "#5C6B5E" }}>{m.label}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>{used} <span style={{ color: "#8FA88A", fontWeight: 400 }}>/ {budget}</span></div>
+                  <div style={{ fontSize: 11, color: left < 0 ? "#C25E3A" : "#5C6B5E" }}>{left < 0 ? `${-left} over` : `${left} left`}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Profile & recommendation */}
+        <div style={S.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={S.label}>Your calorie plan</div>
+            <button onClick={() => setShowProfile(!showProfile)} style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "4px 0" }}>
+              {showProfile ? "Hide" : plan ? "Edit" : "Set up"}
+            </button>
+          </div>
+          {!showProfile && plan && (
+            <div style={{ fontSize: 13, color: "#5C6B5E", marginTop: 6 }}>
+              Recommended: <b style={{ color: "#182420" }}>{plan.recommended} kcal/day</b> · Protein: <b style={{ color: "#182420" }}>{plan.protein}g</b> <span style={{ color: "#8FA88A" }}>({plan.gPerKg} g/kg for {TARGETS[profile.target].label.split(" ")[0].toLowerCase()})</span> · Fiber: <b style={{ color: "#182420" }}>{fiberTarget}g</b>
+            </div>
+          )}
+          {showProfile && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 150 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600 }}>Height</span>
+                    <button onClick={() => setUnits({ ...units, height: units.height === "cm" ? "ft" : "cm" })} style={{ ...S.btn, padding: 0, background: "transparent", color: "#2C5E3F", fontSize: 11 }}>
+                      {units.height === "cm" ? "use ft/in" : "use cm"}
+                    </button>
+                  </div>
+                  {units.height === "cm" ? (
+                    <input style={S.input} type="number" placeholder="cm" value={profile.heightCm}
+                      onChange={(e) => setProfile({ ...profile, heightCm: e.target.value })} />
+                  ) : (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input style={S.input} type="number" placeholder="ft"
+                        value={profile.heightCm ? Math.floor(parseFloat(profile.heightCm) / 30.48) : ""}
+                        onChange={(e) => {
+                          const ft = parseFloat(e.target.value) || 0;
+                          const inch = profile.heightCm ? Math.round((parseFloat(profile.heightCm) / 2.54) % 12) : 0;
+                          setProfile({ ...profile, heightCm: String(Math.round(ft * 30.48 + inch * 2.54)) });
+                        }} />
+                      <input style={S.input} type="number" placeholder="in"
+                        value={profile.heightCm ? Math.round((parseFloat(profile.heightCm) / 2.54) % 12) : ""}
+                        onChange={(e) => {
+                          const inch = parseFloat(e.target.value) || 0;
+                          const ft = profile.heightCm ? Math.floor(parseFloat(profile.heightCm) / 30.48) : 0;
+                          setProfile({ ...profile, heightCm: String(Math.round(ft * 30.48 + inch * 2.54)) });
+                        }} />
+                    </div>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 120 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600 }}>Weight</span>
+                    <button onClick={() => setUnits({ ...units, weight: units.weight === "kg" ? "lb" : "kg" })} style={{ ...S.btn, padding: 0, background: "transparent", color: "#2C5E3F", fontSize: 11 }}>
+                      {units.weight === "kg" ? "use lb" : "use kg"}
+                    </button>
+                  </div>
+                  <input style={S.input} type="number" placeholder={units.weight}
+                    value={profile.weightKg ? (units.weight === "kg" ? profile.weightKg : Math.round(parseFloat(profile.weightKg) * 2.2046)) : ""}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setProfile({ ...profile, weightKg: v ? String(units.weight === "kg" ? v : Math.round((v / 2.2046) * 10) / 10) : "" });
+                    }} />
+                </div>
+                <div style={{ flex: 0.7, minWidth: 80 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Age</div>
+                  <input style={S.input} type="number" placeholder="years" value={profile.age}
+                    onChange={(e) => setProfile({ ...profile, age: e.target.value })} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", background: "#E3E9DE", borderRadius: 10, padding: 3 }}>
+                  {["male", "female"].map((s) => (
+                    <button key={s} onClick={() => setProfile({ ...profile, sex: s })} style={{ ...S.btn, padding: "8px 14px", background: profile.sex === s ? "#2C5E3F" : "transparent", color: profile.sex === s ? "#fff" : "#5C6B5E" }}>
+                      {s === "male" ? "Male" : "Female"}
+                    </button>
+                  ))}
+                </div>
+                <select value={profile.activity} onChange={(e) => setProfile({ ...profile, activity: e.target.value })} style={{ ...S.input, width: "auto", flex: 1, minWidth: 180 }}>
+                  {Object.entries(ACTIVITY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+                <select value={profile.target} onChange={(e) => setProfile({ ...profile, target: e.target.value })} style={{ ...S.input, width: "auto", flex: 1, minWidth: 160 }}>
+                  {Object.entries(TARGETS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13, color: "#182420", cursor: "pointer" }}>
+                <input type="checkbox" checked={profile.fasting} onChange={(e) => setProfile({ ...profile, fasting: e.target.checked })} style={{ width: 16, height: 16 }} />
+                Show intermittent fasting guidance (early 16:8 window)
+              </label>
+              {plan ? (
+                <div style={{ marginTop: 14, padding: "14px 16px", background: "#F4F7F0", borderRadius: 10 }}>
+                  <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13, color: "#5C6B5E" }}>
+                    <span>BMR <b style={{ color: "#182420" }}>{plan.bmr}</b></span>
+                    <span>Maintenance <b style={{ color: "#182420" }}>{plan.tdee}</b></span>
+                    <span>Recommended <b style={{ color: "#2C5E3F", fontSize: 15 }}>{plan.recommended} kcal</b></span>
+                    <span>Protein <b style={{ color: "#182420" }}>{plan.protein}g/day</b></span>
+                  </div>
+                  <button onClick={() => { setGoal(plan.recommended); setShowProfile(false); }} style={{ ...S.btn, background: "#2C5E3F", color: "#fff", marginTop: 12 }}>
+                    Set {plan.recommended} kcal as my daily goal
+                  </button>
+                </div>
+              ) : (
+                <div style={{ marginTop: 12, fontSize: 13, color: "#5C6B5E" }}>Fill in height, weight, and age to get your recommendation.</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Fasting guidance */}
+        {fasting && (
+          <div style={{ ...S.card, borderLeft: `4px solid ${fasting.tone === "good" ? "#2C5E3F" : fasting.tone === "warn" ? "#E9A23B" : "#8FA88A"}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={S.label}>{fasting.title}</div>
+              <span style={{ fontSize: 12, color: "#8FA88A" }}>{new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</span>
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 600, marginTop: 8 }}>{fasting.status}</div>
+            <div style={{ fontSize: 13, color: "#5C6B5E", marginTop: 6 }}>{fasting.tip}</div>
+          </div>
+        )}
+
+        {/* Weight log */}
+        <div style={S.card}>
+          <div style={{ ...S.label, marginBottom: 10 }}>Weight log</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input style={{ ...S.input, flex: 1, minWidth: 120 }} type="number" step="0.1"
+              placeholder={`Today's weight (${units.weight})`} value={weightInput}
+              onChange={(e) => setWeightInput(e.target.value)} />
+            <button onClick={logWeight} style={{ ...S.btn, background: "#2C5E3F", color: "#fff" }}>Log weight</button>
+          </div>
+          {weights.length > 0 && (() => {
+            const toU = (kg) => (units.weight === "kg" ? kg : kg * 2.2046);
+            const fmt = (kg) => (units.weight === "kg" ? (Math.round(kg * 10) / 10).toFixed(1) : Math.round(toU(kg)));
+            const first = weights[0], last = weights[weights.length - 1];
+            const daysBetween = Math.max((new Date(last.date) - new Date(first.date)) / 86400000, 1);
+            const change = last.kg - first.kg;
+            const weeklyRate = (change / daysBetween) * 7;
+            const targetRate = profile.target === "lose" ? -0.5 : profile.target === "gain" ? 0.25 : 0;
+            let pace = "";
+            if (weights.length >= 2) {
+              if (profile.target === "maintain") pace = Math.abs(weeklyRate) < 0.25 ? "Holding steady — right on plan." : `Trending ${weeklyRate > 0 ? "up" : "down"} ${fmt(Math.abs(weeklyRate))} ${units.weight}/week.`;
+              else {
+                const onTrack = targetRate < 0 ? weeklyRate <= targetRate * 0.5 : weeklyRate >= targetRate * 0.5;
+                pace = onTrack
+                  ? `${fmt(Math.abs(weeklyRate))} ${units.weight}/week — on pace with your plan.`
+                  : `${fmt(Math.abs(weeklyRate))} ${units.weight}/week vs a plan of ${fmt(Math.abs(targetRate))} — give it 2–3 weeks before adjusting calories.`;
+              }
+            }
+            return (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13, color: "#5C6B5E", marginBottom: 10 }}>
+                  <span>Latest <b style={{ color: "#182420" }}>{fmt(last.kg)} {units.weight}</b></span>
+                  {weights.length >= 2 && (
+                    <span>Change <b style={{ color: change <= 0 ? "#2C5E3F" : "#C25E3A" }}>{change > 0 ? "+" : "−"}{fmt(Math.abs(change))} {units.weight}</b></span>
+                  )}
+                </div>
+                {weights.length >= 2 ? (
+                  <React.Fragment>
+                    <WeightChart weights={weights} target={profile.target} unit={units.weight} />
+                    <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#8FA88A", marginTop: 4 }}>
+                      <span><span style={{ display: "inline-block", width: 14, height: 3, background: "#2C5E3F", verticalAlign: "middle", marginRight: 4 }} />Actual</span>
+                      {profile.target !== "maintain" && (
+                        <span><span style={{ display: "inline-block", width: 14, height: 3, background: "#E9A23B", verticalAlign: "middle", marginRight: 4 }} />Plan</span>
+                      )}
+                    </div>
+                    {pace && <div style={{ fontSize: 13, color: "#182420", marginTop: 8, padding: "10px 12px", background: "#F4F7F0", borderRadius: 10 }}>{pace}</div>}
+                  </React.Fragment>
+                ) : (
+                  <div style={{ fontSize: 13, color: "#5C6B5E" }}>One entry logged — weigh in again tomorrow and the trend chart appears. Same time of day, before breakfast, gives the cleanest data.</div>
+                )}
+                <details style={{ marginTop: 10 }}>
+                  <summary style={{ fontSize: 13, color: "#2C5E3F", fontWeight: 600, cursor: "pointer" }}>History ({weights.length})</summary>
+                  {[...weights].reverse().map((w) => (
+                    <div key={w.date} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #EDF1EA", fontSize: 13 }}>
+                      <span style={{ color: "#5C6B5E" }}>{new Date(w.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <b>{fmt(w.kg)} {units.weight}</b>
+                        <button onClick={() => removeWeight(w.date)} style={{ ...S.btn, background: "transparent", color: "#C25E3A", padding: "2px 6px", fontSize: 14 }}>×</button>
+                      </span>
+                    </div>
+                  ))}
+                </details>
+              </div>
+            );
+          })()}
+          {weights.length === 0 && (
+            <div style={{ fontSize: 13, color: "#5C6B5E", marginTop: 10 }}>No entries yet. Log your weight and it will be charted against your plan's expected trajectory.</div>
+          )}
+        </div>
+
+        {/* Add food */}
+        <div style={S.card}>
+          <div style={{ ...S.label, marginBottom: 10 }}>Log a food</div>
+          <input style={S.input} placeholder={`Search ${mode} foods — idli, dal, tofu…`} value={query}
+            onChange={(e) => { setQuery(e.target.value); setPending(null); }} />
+          {results.length > 0 && !pending && (
+            <div style={{ marginTop: 8, border: "1px solid #DFE7DA", borderRadius: 10, overflow: "hidden" }}>
+              {results.map((f) => (
+                <button key={f.name} onClick={() => startAdd(f)} style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", padding: "11px 14px", background: "#FBFCF9", border: "none", borderBottom: "1px solid #EDF1EA", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 14, textAlign: "left" }}>
+                  <span>{f.name} {f.vegan && <span style={{ fontSize: 10, color: "#2C5E3F", fontWeight: 700, marginLeft: 4 }}>VEGAN</span>}</span>
+                  <span style={{ color: "#5C6B5E", fontSize: 13 }}>{f.cal} kcal / {perLabel(f)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {query && results.length === 0 && !pending && (
+            <div style={{ marginTop: 8, fontSize: 13, color: "#5C6B5E" }}>Nothing matching — add it as a custom food below.</div>
+          )}
+
+          {pending && (
+            <div style={{ marginTop: 12, padding: "14px 16px", background: "#F4F7F0", borderRadius: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{pending.food.name}</div>
+                <button onClick={() => setPending(null)} style={{ ...S.btn, background: "transparent", color: "#5C6B5E", padding: 0 }}>Cancel</button>
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginTop: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    {pending.food.unit === "g" ? "Grams" : pending.food.unit === "pc" ? "Pieces" : `${pending.food.srvName.charAt(0).toUpperCase() + pending.food.srvName.slice(1)}s`}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <button onClick={() => setPending({ ...pending, qty: Math.max(pending.qty - (pending.food.unit === "g" ? 25 : pending.food.unit === "srv" ? 0.5 : 1), pending.food.unit === "g" ? 25 : 0.5) })} style={{ ...S.btn, background: "#E3E9DE", padding: "8px 14px" }}>−</button>
+                    <input type="number" value={pending.qty} step={pending.food.unit === "g" ? 25 : pending.food.unit === "srv" ? 0.5 : 1}
+                      onChange={(e) => setPending({ ...pending, qty: Math.max(parseFloat(e.target.value) || 0, 0) })}
+                      style={{ ...S.input, width: 80, textAlign: "center" }} />
+                    <button onClick={() => setPending({ ...pending, qty: pending.qty + (pending.food.unit === "g" ? 25 : pending.food.unit === "srv" ? 0.5 : 1) })} style={{ ...S.btn, background: "#E3E9DE", padding: "8px 14px" }}>+</button>
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, color: "#5C6B5E", paddingBottom: 10 }}>
+                  = <b style={{ color: "#182420" }}>{scale(pending.food, pending.qty || 0).cal} kcal</b> · {scale(pending.food, pending.qty || 0).p}g P · {scale(pending.food, pending.qty || 0).fb}g fiber
+                </div>
+              </div>
+              {maxFit && (
+                <div style={{ fontSize: 12, color: "#2C5E3F", marginTop: 8, fontWeight: 600 }}>
+                  You can fit up to {maxFit} in your remaining {Math.round(remaining)} kcal.
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+                {MEALS.map((m) => (
+                  <button key={m.id} onClick={() => setPending({ ...pending, meal: m.id })} style={S.chip(pending.meal === m.id)}>{m.label}</button>
+                ))}
+                <button onClick={confirmAdd} style={{ ...S.btn, background: "#2C5E3F", color: "#fff", marginLeft: "auto" }}>Add to {MEALS.find((m) => m.id === pending.meal).label}</button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap" }}>
+            <button onClick={() => { setShowProduct(!showProduct); setShowCustom(false); }} style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "6px 0" }}>
+              {showProduct ? "− Hide packaged product" : "＋ Log a packaged product (from label)"}
+            </button>
+            <button onClick={() => { setShowCustom(!showCustom); setShowProduct(false); }} style={{ ...S.btn, background: "transparent", color: "#8FA88A", padding: "6px 0" }}>
+              {showCustom ? "− Hide quick add" : "＋ Quick custom food"}
+            </button>
+          </div>
+
+          {/* Packaged product from label — e.g. a bar: 150 kcal / 15g protein per serving */}
+          {showProduct && (
+            <div style={{ marginTop: 8, padding: "14px 16px", background: "#F4F7F0", borderRadius: 12 }}>
+              <div style={{ fontSize: 13, color: "#5C6B5E", marginBottom: 10 }}>Copy the numbers straight off the nutrition label (per serving), then set how many servings you had.</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <input style={{ ...S.input, flex: 2, minWidth: 160 }} placeholder="Product name (e.g. protein bar)" value={product.name} onChange={(e) => setProduct({ ...product, name: e.target.value })} />
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 3, color: "#5C6B5E" }}>kcal / serving</div>
+                  <input style={S.input} type="number" placeholder="150" value={product.cal} onChange={(e) => setProduct({ ...product, cal: e.target.value })} />
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 3, color: "#5C6B5E" }}>protein g</div>
+                  <input style={S.input} type="number" placeholder="15" value={product.p} onChange={(e) => setProduct({ ...product, p: e.target.value })} />
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 3, color: "#5C6B5E" }}>fiber g</div>
+                  <input style={S.input} type="number" placeholder="opt." value={product.fb} onChange={(e) => setProduct({ ...product, fb: e.target.value })} />
+                </div>
+                <div style={{ flex: 1, minWidth: 90 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 3, color: "#5C6B5E" }}>servings</div>
+                  <input style={S.input} type="number" step="0.5" value={product.qty} onChange={(e) => setProduct({ ...product, qty: Math.max(parseFloat(e.target.value) || 0, 0) })} />
+                </div>
+              </div>
+              {product.cal && product.p && (() => {
+                const cal = parseFloat(product.cal) || 0, p = parseFloat(product.p) || 0;
+                const density = p > 0 ? cal / p : 0; // kcal per gram of protein — lower is leaner
+                const verdict = density <= 8 ? { t: "Excellent protein-to-calorie ratio — a lean protein source.", c: "#2C5E3F" }
+                  : density <= 14 ? { t: "Solid protein ratio for a packaged product.", c: "#2C5E3F" }
+                  : density <= 22 ? { t: "Moderate — fine as a snack, but not a lean protein pick.", c: "#E9A23B" }
+                  : { t: "This is more of a treat than a protein source — most calories aren't from protein.", c: "#C25E3A" };
+                const totCal = Math.round(cal * (product.qty || 0));
+                const gToGo = proteinGap;
+                return (
+                  <div style={{ marginTop: 10, fontSize: 13 }}>
+                    <div style={{ color: "#5C6B5E" }}>
+                      = <b style={{ color: "#182420" }}>{totCal} kcal</b> · {r1(p * (product.qty || 0))}g protein · <b>{r1(density)}</b> kcal per g protein
+                    </div>
+                    <div style={{ color: verdict.c, fontWeight: 600, marginTop: 4 }}>{verdict.t}</div>
+                    {gToGo > 0 && p > 0 && (
+                      <div style={{ color: "#5C6B5E", marginTop: 4 }}>Covers {Math.min(Math.round((p * (product.qty || 0) / gToGo) * 100), 100)}% of your remaining {gToGo}g protein for today.</div>
+                    )}
+                  </div>
+                );
+              })()}
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+                {MEALS.map((m) => (
+                  <button key={m.id} onClick={() => setProduct({ ...product, meal: m.id })} style={S.chip((product.meal || defaultMealNow()) === m.id)}>{m.label}</button>
+                ))}
+                <button onClick={addProduct} style={{ ...S.btn, background: "#2C5E3F", color: "#fff", marginLeft: "auto" }}>Add product</button>
+              </div>
+            </div>
+          )}
+
+          {showCustom && (
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <input style={{ ...S.input, flex: 2, minWidth: 140 }} placeholder="Food name" value={custom.name} onChange={(e) => setCustom({ ...custom, name: e.target.value })} />
+              <input style={{ ...S.input, flex: 1, minWidth: 70 }} type="number" placeholder="kcal" value={custom.cal} onChange={(e) => setCustom({ ...custom, cal: e.target.value })} />
+              <input style={{ ...S.input, flex: 1, minWidth: 70 }} type="number" placeholder="protein g" value={custom.p} onChange={(e) => setCustom({ ...custom, p: e.target.value })} />
+              <input style={{ ...S.input, flex: 1, minWidth: 70 }} type="number" placeholder="fiber g" value={custom.fb} onChange={(e) => setCustom({ ...custom, fb: e.target.value })} />
+              <button onClick={addCustom} style={{ ...S.btn, background: "#2C5E3F", color: "#fff" }}>Add</button>
+            </div>
+          )}
+        </div>
+
+        {/* Suggestions */}
+        <div style={S.card}>
+          <div style={{ ...S.label, marginBottom: 6 }}>What to eat next</div>
+          <div style={{ fontSize: 13, color: "#5C6B5E", marginBottom: 12 }}>{note}</div>
+          {suggestions.length > 0 && (
+            <div style={{ display: "grid", gap: 8 }}>
+              {suggestions.map((f) => (
+                <div key={f.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: "#F4F7F0", borderRadius: 10, gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{f.name}</div>
+                    <div style={{ fontSize: 12, color: "#5C6B5E" }}>{f.reason}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 13, color: "#5C6B5E" }}>{f.cal} kcal / {perLabel(f)}</span>
+                    <button onClick={() => startAdd(f)} style={{ ...S.btn, background: "#E9A23B", color: "#182420", padding: "8px 14px" }}>Eat this</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Today's log, grouped by meal */}
+        <div style={S.card}>
+          <div style={{ ...S.label, marginBottom: 10 }}>Today's log</div>
+          {log.length === 0 && (
+            <div style={{ fontSize: 14, color: "#5C6B5E" }}>Nothing logged yet. Search above or tap a suggestion to start the day.</div>
+          )}
+          {MEALS.map((m) => {
+            const items = log.filter((x) => x.meal === m.id);
+            if (items.length === 0) return null;
+            const budget = Math.round(goal * m.share);
+            const used = Math.round(mealTotals[m.id] || 0);
+            return (
+              <div key={m.id} style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", paddingBottom: 6, borderBottom: "2px solid #2C5E3F" }}>
+                  <span style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 700, fontSize: 16 }}>{m.label}</span>
+                  <span style={{ fontSize: 12, color: used > budget ? "#C25E3A" : "#5C6B5E" }}>{used} / {budget} kcal</span>
+                </div>
+                {items.map((x) => (
+                  <div key={x.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #EDF1EA" }}>
+                    <div>
+                      <div style={{ fontWeight: 500, fontSize: 14 }}>{x.name} <span style={{ color: "#8FA88A", fontWeight: 400 }}>· {x.qtyLabel}</span></div>
+                      <div style={{ fontSize: 12, color: "#5C6B5E" }}>{x.p}g P · {x.c}g C · {x.f}g F · {x.fb}g fiber</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ fontWeight: 600, fontSize: 14 }}>{x.cal}</span>
+                      <button onClick={() => removeFood(x.id)} style={{ ...S.btn, background: "transparent", color: "#C25E3A", padding: "4px 6px", fontSize: 16 }}>×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {log.length > 0 && (
+            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4, fontWeight: 700, fontSize: 14 }}>
+              <span>Day total</span><span>{totals.cal} kcal · {r1(totals.fb)}g fiber</span>
+            </div>
+          )}
+        </div>
+
+        <div style={{ textAlign: "center", fontSize: 12, color: "#8FA88A" }}>
+          Data saves locally and, when connected, to greenplate-data.json in your Google Drive. Calorie values are typical estimates; the recommendation uses the Mifflin-St Jeor equation and is a starting point, not medical advice.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<VegCalorieTracker />);
+</script>
+</body>
+</html>
