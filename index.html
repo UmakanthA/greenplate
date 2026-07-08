@@ -426,8 +426,13 @@ function VegCalorieTracker() {
   const [pending, setPending] = useState(null);
   const [custom, setCustom] = useState({ name: "", cal: "", p: "", fb: "" });
   const [showCustom, setShowCustom] = useState(false);
-  const [product, setProduct] = useState({ name: "", cal: "", p: "", fb: "", qty: 1, meal: "" });
+  const [product, setProduct] = useState({ name: "", cal: "", p: "", fb: "", qty: 1, meal: "", yuka: "" });
   const [showProduct, setShowProduct] = useState(false);
+  const [savedProducts, setSavedProducts] = useState([]); // [{ name, cal, p, fb, yuka }]
+  const [showImport, setShowImport] = useState(false);
+  const [dayText, setDayText] = useState("");
+  const [importMsg, setImportMsg] = useState(null);
+  const fileInputRef = useRef(null);
   const [profile, setProfile] = useState({ heightCm: "", weightKg: "", age: "", sex: "male", activity: "moderate", target: "maintain", fasting: true });
   const [showProfile, setShowProfile] = useState(false);
   const [units, setUnits] = useState({ height: "cm", weight: "kg" });
@@ -473,6 +478,7 @@ function VegCalorieTracker() {
     settings: { goal, mode, profile },
     logs: allLogs,
     weights,
+    savedProducts,
     updatedAt: Date.now(),
   });
 
@@ -485,6 +491,7 @@ function VegCalorieTracker() {
     }
     if (d.logs) setAllLogs(d.logs);
     if (d.weights) setWeights(d.weights);
+    if (d.savedProducts) setSavedProducts(d.savedProducts);
   }
 
   /* ---------- Persist locally + schedule Drive push on any change ---------- */
@@ -497,7 +504,7 @@ function VegCalorieTracker() {
       clearTimeout(pushTimerRef.current);
       pushTimerRef.current = setTimeout(() => pushToDrive(blob), 2000);
     }
-  }, [goal, mode, profile, allLogs, weights, loaded]);
+  }, [goal, mode, profile, allLogs, weights, savedProducts, loaded]);
 
   /* ---------- Google Drive ---------- */
   function initTokenClient() {
@@ -647,21 +654,156 @@ function VegCalorieTracker() {
     const qty = product.qty || 1;
     if (!product.name.trim() || !calPer || calPer <= 0) return;
     const meal = product.meal || defaultMealNow();
+    const name = product.name.trim();
+    const fbPer = parseFloat(product.fb) || 0;
     setLog((l) => [...l, {
-      name: product.name.trim(),
+      name,
       qtyLabel: `${qty} serving${qty !== 1 ? "s" : ""}`,
       meal,
       cal: Math.round(calPer * qty),
       p: r1((pPer || 0) * qty),
       c: 0, f: 0,
-      fb: r1((parseFloat(product.fb) || 0) * qty),
+      fb: r1(fbPer * qty),
       id: Date.now() + Math.random(),
     }]);
-    setProduct({ name: "", cal: "", p: "", fb: "", qty: 1, meal: "" });
+    // Remember this product for one-tap re-adding later (dedupe by name, keep latest values)
+    setSavedProducts((sp) => {
+      const rest = sp.filter((x) => x.name.toLowerCase() !== name.toLowerCase());
+      return [{ name, cal: calPer, p: pPer || 0, fb: fbPer, yuka: product.yuka || "" }, ...rest].slice(0, 40);
+    });
+    setProduct({ name: "", cal: "", p: "", fb: "", qty: 1, meal: "", yuka: "" });
     setShowProduct(false);
   };
 
+  // One-tap re-add a saved product (1 serving, current meal)
+  const quickAddSaved = (sp) => {
+    setLog((l) => [...l, {
+      name: sp.name,
+      qtyLabel: "1 serving",
+      meal: defaultMealNow(),
+      cal: Math.round(sp.cal),
+      p: r1(sp.p),
+      c: 0, f: 0,
+      fb: r1(sp.fb || 0),
+      id: Date.now() + Math.random(),
+    }]);
+  };
+
+  const removeSaved = (name) => setSavedProducts((sp) => sp.filter((x) => x.name !== name));
+
   const removeFood = (id) => setLog((l) => l.filter((x) => x.id !== id));
+
+  /* ---------- Quick day import: parse loose totals text ---------- */
+  // Accepts things like "1850 cal, 95 protein, 24 fiber" / "1850 kcal 95p 24f"
+  // Returns { cal, p, fb } with whatever it can find.
+  function parseDayTotals(text) {
+    // Strip commas used as thousands separators (1,850 -> 1850), keep other spacing
+    const cleaned = text.replace(/(\d),(\d)/g, "$1$2");
+    const t = " " + cleaned.toLowerCase() + " ";
+    const grab = (patterns) => {
+      for (const re of patterns) {
+        const m = t.match(re);
+        if (m) return parseFloat(m[1]);
+      }
+      return null;
+    };
+    // Labeled forms first (most reliable), then shorthand like "95p" (macro-sized only)
+    const p = grab([/protein\s*:\s*(\d+(?:\.\d+)?)/, /(\d+(?:\.\d+)?)\s*g?\s*(?:protein|prot)\b/, /\b(\d{1,3}(?:\.\d+)?)\s*p\b/]);
+    const fb = grab([/(?:fiber|fibre)\s*:\s*(\d+(?:\.\d+)?)/, /(\d+(?:\.\d+)?)\s*g?\s*(?:fiber|fibre|fib)\b/, /\b(\d{1,3}(?:\.\d+)?)\s*f\b/]);
+    // number-before-keyword (e.g. "1850 kcal") first, then "calories: 1850"
+    let cal = grab([/(\d+(?:\.\d+)?)\s*(?:kcal|calories|cals|cal)\b/, /(?:calories|kcal)\s*:\s*(\d+(?:\.\d+)?)/]);
+    // fallback: if no calorie keyword, take the largest number ≥200 that isn't the protein/fiber value
+    if (cal == null) {
+      const nums = (cleaned.match(/\d+(?:\.\d+)?/g) || []).map(Number).filter((n) => n >= 200 && n !== p && n !== fb);
+      if (nums.length) cal = Math.max(...nums);
+    }
+    return { cal, p, fb };
+  }
+
+  const importDayTotals = () => {
+    const { cal, p, fb } = parseDayTotals(dayText);
+    if (!cal || cal <= 0) { setImportMsg({ ok: false, text: "Couldn't find a calorie number. Try e.g. \"1850 cal, 95 protein, 24 fiber\"." }); return; }
+    // Log as a single summary entry so it doesn't clutter meals
+    setLog((l) => [
+      ...l.filter((x) => x.name !== "Day totals (imported)"), // replace prior import for the day
+      { name: "Day totals (imported)", qtyLabel: "whole day", meal: "breakfast",
+        cal: Math.round(cal), p: r1(p || 0), c: 0, f: 0, fb: r1(fb || 0), id: Date.now() + Math.random() },
+    ]);
+    setImportMsg({ ok: true, text: `Logged ${Math.round(cal)} kcal${p ? `, ${r1(p)}g protein` : ""}${fb ? `, ${r1(fb)}g fiber` : ""} for today.` });
+    setDayText("");
+  };
+
+  /* ---------- CSV import (Cronometer "Servings"/"Food & Recipe" exports) ---------- */
+  function parseCSV(text) {
+    const rows = [];
+    let cur = [], field = "", inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQ) {
+        if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
+        else if (ch === '"') inQ = false;
+        else field += ch;
+      } else {
+        if (ch === '"') inQ = true;
+        else if (ch === ",") { cur.push(field); field = ""; }
+        else if (ch === "\n" || ch === "\r") { if (field !== "" || cur.length) { cur.push(field); rows.push(cur); cur = []; field = ""; } if (ch === "\r" && text[i + 1] === "\n") i++; }
+        else field += ch;
+      }
+    }
+    if (field !== "" || cur.length) { cur.push(field); rows.push(cur); }
+    return rows;
+  }
+
+  const handleCSV = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const rows = parseCSV(String(e.target.result));
+        if (rows.length < 2) { setImportMsg({ ok: false, text: "That CSV looks empty." }); return; }
+        const header = rows[0].map((h) => h.trim().toLowerCase());
+        const idx = (names) => header.findIndex((h) => names.some((n) => h === n || h.includes(n)));
+        const iDate = idx(["day", "date"]);
+        const iName = idx(["food name", "food", "name"]);
+        const iCal = idx(["energy (kcal)", "energy", "calories", "kcal"]);
+        const iP = idx(["protein (g)", "protein"]);
+        const iFb = idx(["fiber (g)", "fibre (g)", "fiber", "fibre"]);
+        if (iCal === -1) { setImportMsg({ ok: false, text: "Couldn't find a calorie/energy column in that CSV." }); return; }
+        const byDay = {};
+        let count = 0;
+        for (let r = 1; r < rows.length; r++) {
+          const row = rows[r];
+          if (!row || row.length <= iCal) continue;
+          const cal = parseFloat(row[iCal]); if (!cal) continue;
+          let d = iDate !== -1 ? (row[iDate] || "").trim() : date;
+          // normalize common date formats to YYYY-MM-DD
+          const dm = d.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/) || d.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+          if (dm) { d = dm[1].length === 4 ? `${dm[1]}-${String(dm[2]).padStart(2,"0")}-${String(dm[3]).padStart(2,"0")}` : `${dm[3]}-${String(dm[2]).padStart(2,"0")}-${String(dm[1]).padStart(2,"0")}`; }
+          else d = date;
+          (byDay[d] = byDay[d] || []).push({
+            name: (iName !== -1 && row[iName]) ? row[iName].trim().slice(0, 60) : "Imported item",
+            qtyLabel: "imported", meal: "lunch",
+            cal: Math.round(cal), p: r1(parseFloat(row[iP]) || 0), c: 0, f: 0, fb: r1(parseFloat(row[iFb]) || 0),
+            id: Date.now() + Math.random() + r,
+          });
+          count++;
+        }
+        const days = Object.keys(byDay);
+        if (!count) { setImportMsg({ ok: false, text: "No rows with calories found." }); return; }
+        setAllLogs((all) => {
+          const next = { ...all };
+          days.forEach((d) => {
+            const existing = (next[d] || []).filter((x) => x.qtyLabel !== "imported"); // replace previous import for that day
+            next[d] = [...existing, ...byDay[d]];
+          });
+          return next;
+        });
+        setImportMsg({ ok: true, text: `Imported ${count} items across ${days.length} day${days.length !== 1 ? "s" : ""}.` });
+      } catch (err) {
+        setImportMsg({ ok: false, text: "Couldn't read that file — is it a CSV?" });
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const logWeight = () => {
     const v = parseFloat(weightInput);
@@ -1039,7 +1181,7 @@ function VegCalorieTracker() {
 
           <div style={{ display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap" }}>
             <button onClick={() => { setShowProduct(!showProduct); setShowCustom(false); }} style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "6px 0" }}>
-              {showProduct ? "− Hide packaged product" : "＋ Log a packaged product (from label)"}
+              {showProduct ? "− Hide packaged products" : `＋ Packaged products${savedProducts.length ? ` (${savedProducts.length} saved)` : " (from label)"}`}
             </button>
             <button onClick={() => { setShowCustom(!showCustom); setShowProduct(false); }} style={{ ...S.btn, background: "transparent", color: "#8FA88A", padding: "6px 0" }}>
               {showCustom ? "− Hide quick add" : "＋ Quick custom food"}
@@ -1049,9 +1191,34 @@ function VegCalorieTracker() {
           {/* Packaged product from label — e.g. a bar: 150 kcal / 15g protein per serving */}
           {showProduct && (
             <div style={{ marginTop: 8, padding: "14px 16px", background: "#F4F7F0", borderRadius: 12 }}>
+              {savedProducts.length > 0 && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "#5C6B5E", marginBottom: 8 }}>My products — tap to add 1 serving</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {savedProducts.map((sp) => {
+                      const yScore = sp.yuka ? parseInt(sp.yuka, 10) : null;
+                      const yColor = yScore == null ? "#8FA88A" : yScore >= 75 ? "#2C5E3F" : yScore >= 50 ? "#E9A23B" : yScore >= 25 ? "#D9822B" : "#C25E3A";
+                      return (
+                        <div key={sp.name} style={{ display: "flex", alignItems: "center", background: "#fff", border: "1px solid #DFE7DA", borderRadius: 20, padding: "5px 6px 5px 12px", gap: 8 }}>
+                          {yScore != null && (
+                            <span title="Yuka score" style={{ width: 22, height: 22, borderRadius: 11, background: yColor, color: "#fff", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{yScore}</span>
+                          )}
+                          <button onClick={() => quickAddSaved(sp)} style={{ border: "none", background: "transparent", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600, color: "#182420", padding: 0 }}>
+                            {sp.name} <span style={{ color: "#5C6B5E", fontWeight: 400 }}>· {Math.round(sp.cal)} kcal · {r1(sp.p)}g P</span>
+                          </button>
+                          <button onClick={() => removeSaved(sp.name)} title="Forget this product" style={{ border: "none", background: "transparent", cursor: "pointer", color: "#C25E3A", fontSize: 14, padding: "0 4px" }}>×</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ height: 1, background: "#DFE7DA", margin: "14px 0 4px" }} />
+                  <div style={{ fontSize: 12, color: "#8FA88A", marginBottom: 8 }}>Or enter a new product below — it'll be saved here after.</div>
+                </div>
+              )}
               <div style={{ fontSize: 13, color: "#5C6B5E", marginBottom: 10 }}>Copy the numbers straight off the nutrition label (per serving), then set how many servings you had.</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <input style={{ ...S.input, flex: 2, minWidth: 160 }} placeholder="Product name (e.g. protein bar)" value={product.name} onChange={(e) => setProduct({ ...product, name: e.target.value })} />
+                <input style={{ ...S.input, flex: 1, minWidth: 110 }} type="number" placeholder="Yuka score (opt.)" value={product.yuka} onChange={(e) => setProduct({ ...product, yuka: e.target.value })} />
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
                 <div style={{ flex: 1, minWidth: 80 }}>
@@ -1108,6 +1275,43 @@ function VegCalorieTracker() {
               <input style={{ ...S.input, flex: 1, minWidth: 70 }} type="number" placeholder="protein g" value={custom.p} onChange={(e) => setCustom({ ...custom, p: e.target.value })} />
               <input style={{ ...S.input, flex: 1, minWidth: 70 }} type="number" placeholder="fiber g" value={custom.fb} onChange={(e) => setCustom({ ...custom, fb: e.target.value })} />
               <button onClick={addCustom} style={{ ...S.btn, background: "#2C5E3F", color: "#fff" }}>Add</button>
+            </div>
+          )}
+        </div>
+
+        {/* Import from another app (Cronometer etc.) */}
+        <div style={S.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={S.label}>Import from another app</div>
+            <button onClick={() => { setShowImport(!showImport); setImportMsg(null); }} style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "4px 0" }}>
+              {showImport ? "Hide" : "Open"}
+            </button>
+          </div>
+          {showImport && (
+            <div style={{ marginTop: 12 }}>
+              {/* Quick day totals — mobile friendly */}
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Quick day totals <span style={{ color: "#8FA88A", fontWeight: 400 }}>· easiest on phone</span></div>
+              <div style={{ fontSize: 12, color: "#5C6B5E", marginBottom: 8 }}>Read the day's totals off Cronometer (or any app) and type them here — any order, loose format works.</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <input style={{ ...S.input, flex: 1, minWidth: 180 }} placeholder="e.g. 1850 cal, 95 protein, 24 fiber" value={dayText}
+                  onChange={(e) => setDayText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") importDayTotals(); }} />
+                <button onClick={importDayTotals} style={{ ...S.btn, background: "#2C5E3F", color: "#fff" }}>Log day</button>
+              </div>
+
+              {/* CSV import — laptop friendly */}
+              <div style={{ height: 1, background: "#EDF1EA", margin: "16px 0" }} />
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>CSV file import <span style={{ color: "#8FA88A", fontWeight: 400 }}>· detailed, best on computer</span></div>
+              <div style={{ fontSize: 12, color: "#5C6B5E", marginBottom: 8 }}>In Cronometer: Settings → Account → Export Data → a "Servings" or "Daily Nutrition" CSV. Upload it here to load every item, grouped by day.</div>
+              <input ref={fileInputRef} type="file" accept=".csv,text/csv" style={{ display: "none" }}
+                onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) handleCSV(f); e.target.value = ""; }} />
+              <button onClick={() => fileInputRef.current && fileInputRef.current.click()} style={{ ...S.btn, background: "#E3E9DE", color: "#182420" }}>Choose CSV file…</button>
+
+              {importMsg && (
+                <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 10, fontSize: 13, background: importMsg.ok ? "#F4F7F0" : "#FBE9E2", color: importMsg.ok ? "#2C5E3F" : "#C25E3A" }}>
+                  {importMsg.text}
+                </div>
+              )}
             </div>
           )}
         </div>
