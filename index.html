@@ -434,12 +434,23 @@ function VegCalorieTracker() {
   const [importMsg, setImportMsg] = useState(null);
   const [copyMenuFor, setCopyMenuFor] = useState(null); // id of item whose copy menu is open
   const [savedMealFor, setSavedMealFor] = useState(null); // name of saved product whose meal picker is open
+  const [copyQty, setCopyQty] = useState(1); // servings multiplier for the open copy menu
+  const [savedQty, setSavedQty] = useState(1); // servings for the open saved-product picker
   const fileInputRef = useRef(null);
   const [profile, setProfile] = useState({ heightCm: "", weightKg: "", age: "", sex: "male", activity: "moderate", target: "maintain", fasting: true });
   const [showProfile, setShowProfile] = useState(false);
   const [units, setUnits] = useState({ height: "cm", weight: "kg" });
   const [weights, setWeights] = useState([]);
   const [weightInput, setWeightInput] = useState("");
+  const [water, setWater] = useState({}); // { 'YYYY-MM-DD': glasses }
+  const [templates, setTemplates] = useState([]); // [{ name, items: [logEntry...] }]
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [tmplName, setTmplName] = useState("");
+  const [undoStack, setUndoStack] = useState(null); // { entry, dateKey } for last delete
+  const [editingProduct, setEditingProduct] = useState(null); // name of product being edited
+  const [editVals, setEditVals] = useState({ cal: "", p: "", fb: "", yuka: "" });
+  const [showHistory, setShowHistory] = useState(false);
+  const undoTimerRef = useRef(null);
   const [drive, setDrive] = useState({ connected: false, syncing: false, lastSync: null, error: null });
 
   const date = todayKey();
@@ -481,6 +492,8 @@ function VegCalorieTracker() {
     logs: allLogs,
     weights,
     savedProducts,
+    water,
+    templates,
     updatedAt: Date.now(),
   });
 
@@ -494,6 +507,8 @@ function VegCalorieTracker() {
     if (d.logs) setAllLogs(d.logs);
     if (d.weights) setWeights(d.weights);
     if (d.savedProducts) setSavedProducts(d.savedProducts);
+    if (d.water) setWater(d.water);
+    if (d.templates) setTemplates(d.templates);
   }
 
   /* ---------- Persist locally + schedule Drive push on any change ---------- */
@@ -506,7 +521,7 @@ function VegCalorieTracker() {
       clearTimeout(pushTimerRef.current);
       pushTimerRef.current = setTimeout(() => pushToDrive(blob), 2000);
     }
-  }, [goal, mode, profile, allLogs, weights, savedProducts, loaded]);
+  }, [goal, mode, profile, allLogs, weights, savedProducts, water, templates, loaded]);
 
   /* ---------- Google Drive ---------- */
   function initTokenClient() {
@@ -678,28 +693,108 @@ function VegCalorieTracker() {
   };
 
   // One-tap re-add a saved product (1 serving, current meal)
-  const quickAddSaved = (sp, meal) => {
+  const quickAddSaved = (sp, meal, qty = 1) => {
+    const q = qty && qty > 0 ? qty : 1;
     setLog((l) => [...l, {
       name: sp.name,
-      qtyLabel: "1 serving",
+      qtyLabel: `${q} serving${q !== 1 ? "s" : ""}`,
       meal: meal || defaultMealNow(),
-      cal: Math.round(sp.cal),
-      p: r1(sp.p),
+      cal: Math.round(sp.cal * q),
+      p: r1(sp.p * q),
       c: 0, f: 0,
-      fb: r1(sp.fb || 0),
+      fb: r1((sp.fb || 0) * q),
       id: Date.now() + Math.random(),
     }]);
     setSavedMealFor(null);
+    setSavedQty(1);
   };
 
   const removeSaved = (name) => setSavedProducts((sp) => sp.filter((x) => x.name !== name));
 
-  const removeFood = (id) => setLog((l) => l.filter((x) => x.id !== id));
+  const removeFood = (id) => {
+    const entry = log.find((x) => x.id === id);
+    setLog((l) => l.filter((x) => x.id !== id));
+    if (entry) {
+      setUndoStack({ entry, dateKey: date });
+      clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = setTimeout(() => setUndoStack(null), 6000);
+    }
+  };
 
-  // Copy an already-logged item into another meal, same quantity/macros
-  const copyToMeal = (item, targetMeal) => {
-    setLog((l) => [...l, { ...item, meal: targetMeal, id: Date.now() + Math.random() }]);
+  const undoDelete = () => {
+    if (!undoStack) return;
+    const { entry, dateKey } = undoStack;
+    setAllLogs((all) => ({ ...all, [dateKey]: [...(all[dateKey] || []), entry] }));
+    setUndoStack(null);
+    clearTimeout(undoTimerRef.current);
+  };
+
+  /* ---------- Copy a previous day into today ---------- */
+  const yesterdayKey = () => {
+    const d = new Date(date + "T12:00:00");
+    d.setDate(d.getDate() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  const copyDayIntoToday = (fromKey) => {
+    const src = allLogs[fromKey] || [];
+    if (!src.length) return;
+    const clones = src.map((x) => ({ ...x, id: Date.now() + Math.random() * (1 + Math.random()) }));
+    setLog((l) => [...l, ...clones]);
+  };
+
+  /* ---------- Meal templates ---------- */
+  const saveTemplate = () => {
+    if (!tmplName.trim() || log.length === 0) return;
+    const items = log.map((x) => ({ name: x.name, qtyLabel: x.qtyLabel, meal: x.meal, cal: x.cal, p: x.p, c: x.c, f: x.f, fb: x.fb || 0 }));
+    setTemplates((t) => [{ name: tmplName.trim(), items }, ...t.filter((x) => x.name.toLowerCase() !== tmplName.trim().toLowerCase())].slice(0, 20));
+    setTmplName("");
+  };
+
+  const applyTemplate = (tmpl) => {
+    const clones = tmpl.items.map((x) => ({ ...x, id: Date.now() + Math.random() * (1 + Math.random()) }));
+    setLog((l) => [...l, ...clones]);
+  };
+
+  const removeTemplate = (name) => setTemplates((t) => t.filter((x) => x.name !== name));
+
+  /* ---------- Edit a saved product ---------- */
+  const startEditProduct = (sp) => {
+    setEditingProduct(sp.name);
+    setEditVals({ cal: String(sp.cal), p: String(sp.p), fb: String(sp.fb || 0), yuka: sp.yuka || "" });
+  };
+
+  const saveEditProduct = (name) => {
+    const cal = parseFloat(editVals.cal);
+    if (!cal || cal <= 0) return;
+    setSavedProducts((sp) => sp.map((x) => x.name === name
+      ? { ...x, cal, p: parseFloat(editVals.p) || 0, fb: parseFloat(editVals.fb) || 0, yuka: editVals.yuka || "" }
+      : x));
+    setEditingProduct(null);
+  };
+
+  /* ---------- Water ---------- */
+  const waterToday = water[date] || 0;
+  const setWaterToday = (n) => setWater((w) => ({ ...w, [date]: Math.max(n, 0) }));
+
+  // Copy an already-logged item into another meal, scaling by a servings multiplier
+  const copyToMeal = (item, targetMeal, qty = 1) => {
+    const q = qty && qty > 0 ? qty : 1;
+    // The original item already represents 1 "log entry"; multiply its values by q
+    const label = q === 1 ? item.qtyLabel : `${item.qtyLabel} ×${q}`;
+    setLog((l) => [...l, {
+      ...item,
+      meal: targetMeal,
+      qtyLabel: label,
+      cal: Math.round(item.cal * q),
+      p: r1(item.p * q),
+      c: r1(item.c * q),
+      f: r1(item.f * q),
+      fb: r1((item.fb || 0) * q),
+      id: Date.now() + Math.random(),
+    }]);
     setCopyMenuFor(null);
+    setCopyQty(1);
   };
 
   /* ---------- Quick day import: parse loose totals text ---------- */
@@ -1063,6 +1158,21 @@ function VegCalorieTracker() {
           </div>
         )}
 
+        {/* Water tracker */}
+        <div style={S.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={S.label}>Water</div>
+            <div style={{ fontSize: 13, color: "#5C6B5E" }}><b style={{ color: "#182420" }}>{waterToday}</b> / 8 glasses <span style={{ color: "#8FA88A" }}>· ~{r1(waterToday * 0.25)}L</span></div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <button key={i} onClick={() => setWaterToday(i + 1 === waterToday ? i : i + 1)} title={`${i + 1} glasses`}
+                style={{ width: 30, height: 38, borderRadius: "4px 4px 8px 8px", border: "2px solid " + (i < waterToday ? "#2C5E3F" : "#C9D5C3"), background: i < waterToday ? "#2C5E3F" : "transparent", cursor: "pointer", transition: "all .15s" }} />
+            ))}
+            <button onClick={() => setWaterToday(waterToday + 1)} style={{ ...S.btn, background: "#E3E9DE", color: "#182420", padding: "8px 12px", marginLeft: 4 }}>+ glass</button>
+          </div>
+        </div>
+
         {/* Weight log */}
         <div style={S.card}>
           <div style={{ ...S.label, marginBottom: 10 }}>Weight log</div>
@@ -1214,16 +1324,33 @@ function VegCalorieTracker() {
                             {yScore != null && (
                               <span title="Yuka score" style={{ width: 22, height: 22, borderRadius: 11, background: yColor, color: "#fff", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{yScore}</span>
                             )}
-                            <button onClick={() => setSavedMealFor(open ? null : sp.name)} style={{ border: "none", background: "transparent", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600, color: "#182420", padding: 0, flex: 1, textAlign: "left" }}>
+                            <button onClick={() => { setSavedMealFor(open ? null : sp.name); setSavedQty(1); }} style={{ border: "none", background: "transparent", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600, color: "#182420", padding: 0, flex: 1, textAlign: "left" }}>
                               {sp.name} <span style={{ color: "#5C6B5E", fontWeight: 400 }}>· {Math.round(sp.cal)} kcal · {r1(sp.p)}g P</span>
                             </button>
+                            <button onClick={() => startEditProduct(sp)} title="Edit values" style={{ border: "none", background: "transparent", cursor: "pointer", color: "#2C5E3F", fontSize: 13, padding: "0 4px", flexShrink: 0 }}>✎</button>
                             <button onClick={() => removeSaved(sp.name)} title="Forget this product" style={{ border: "none", background: "transparent", cursor: "pointer", color: "#C25E3A", fontSize: 14, padding: "0 4px", flexShrink: 0 }}>×</button>
                           </div>
+                          {editingProduct === sp.name && (
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-end", padding: "6px 4px", width: "100%" }}>
+                              <div><div style={{ fontSize: 10, color: "#5C6B5E", fontWeight: 600 }}>kcal</div><input style={{ ...S.input, width: 70, padding: "8px 10px" }} type="number" value={editVals.cal} onChange={(e) => setEditVals({ ...editVals, cal: e.target.value })} /></div>
+                              <div><div style={{ fontSize: 10, color: "#5C6B5E", fontWeight: 600 }}>protein</div><input style={{ ...S.input, width: 60, padding: "8px 10px" }} type="number" value={editVals.p} onChange={(e) => setEditVals({ ...editVals, p: e.target.value })} /></div>
+                              <div><div style={{ fontSize: 10, color: "#5C6B5E", fontWeight: 600 }}>fiber</div><input style={{ ...S.input, width: 60, padding: "8px 10px" }} type="number" value={editVals.fb} onChange={(e) => setEditVals({ ...editVals, fb: e.target.value })} /></div>
+                              <div><div style={{ fontSize: 10, color: "#5C6B5E", fontWeight: 600 }}>Yuka</div><input style={{ ...S.input, width: 60, padding: "8px 10px" }} type="number" value={editVals.yuka} onChange={(e) => setEditVals({ ...editVals, yuka: e.target.value })} /></div>
+                              <button onClick={() => saveEditProduct(sp.name)} style={{ ...S.btn, background: "#2C5E3F", color: "#fff", padding: "8px 12px" }}>Save</button>
+                              <button onClick={() => setEditingProduct(null)} style={{ ...S.btn, background: "transparent", color: "#8FA88A", padding: "8px 6px" }}>Cancel</button>
+                            </div>
+                          )}
                           {open && (
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: "2px 4px 6px" }}>
-                              <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600 }}>Add to:</span>
+                              <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600 }}>Servings:</span>
+                              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                <button onClick={() => setSavedQty((q) => Math.max(r1(q - 0.5), 0.5))} style={{ ...S.btn, background: "#E3E9DE", padding: "4px 10px" }}>−</button>
+                                <span style={{ minWidth: 28, textAlign: "center", fontWeight: 700, fontSize: 14 }}>{savedQty}</span>
+                                <button onClick={() => setSavedQty((q) => r1(q + 0.5))} style={{ ...S.btn, background: "#E3E9DE", padding: "4px 10px" }}>+</button>
+                              </div>
+                              <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600, marginLeft: 4 }}>→ add to:</span>
                               {MEALS.map((mm) => (
-                                <button key={mm.id} onClick={() => quickAddSaved(sp, mm.id)} style={S.chip(false)}>{mm.label}</button>
+                                <button key={mm.id} onClick={() => quickAddSaved(sp, mm.id, savedQty)} style={S.chip(false)}>{mm.label}</button>
                               ))}
                             </div>
                           )}
@@ -1360,7 +1487,44 @@ function VegCalorieTracker() {
 
         {/* Today's log, grouped by meal */}
         <div style={S.card}>
-          <div style={{ ...S.label, marginBottom: 10 }}>Today's log</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+            <div style={S.label}>Today's log</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {(allLogs[yesterdayKey()] || []).length > 0 && (
+                <button onClick={() => copyDayIntoToday(yesterdayKey())} style={{ ...S.btn, background: "#E3E9DE", color: "#182420", padding: "6px 12px", fontSize: 13 }}>⧉ Copy yesterday</button>
+              )}
+              <button onClick={() => setShowTemplates(!showTemplates)} style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "6px 8px", fontSize: 13 }}>
+                {showTemplates ? "Hide templates" : `Templates${templates.length ? ` (${templates.length})` : ""}`}
+              </button>
+            </div>
+          </div>
+
+          {showTemplates && (
+            <div style={{ background: "#F4F7F0", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+              {templates.length > 0 ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+                  {templates.map((t) => {
+                    const tCal = t.items.reduce((s, i) => s + i.cal, 0);
+                    return (
+                      <div key={t.name} style={{ display: "flex", alignItems: "center", background: "#fff", border: "1px solid #DFE7DA", borderRadius: 20, padding: "5px 6px 5px 12px", gap: 8 }}>
+                        <button onClick={() => applyTemplate(t)} style={{ border: "none", background: "transparent", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600, color: "#182420", padding: 0 }}>
+                          {t.name} <span style={{ color: "#5C6B5E", fontWeight: 400 }}>· {t.items.length} items · {tCal} kcal</span>
+                        </button>
+                        <button onClick={() => removeTemplate(t.name)} title="Delete template" style={{ border: "none", background: "transparent", cursor: "pointer", color: "#C25E3A", fontSize: 14, padding: "0 4px" }}>×</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: "#5C6B5E", marginBottom: 12 }}>No templates yet. Log a set of foods, then save them below as a reusable combo (e.g. "My usual breakfast").</div>
+              )}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <input style={{ ...S.input, flex: 1, minWidth: 160 }} placeholder="Name this combo (saves today's log)" value={tmplName} onChange={(e) => setTmplName(e.target.value)} />
+                <button onClick={saveTemplate} disabled={!tmplName.trim() || log.length === 0} style={{ ...S.btn, background: log.length === 0 || !tmplName.trim() ? "#C9D5C3" : "#2C5E3F", color: "#fff" }}>Save current log</button>
+              </div>
+            </div>
+          )}
+
           {log.length === 0 && (
             <div style={{ fontSize: 14, color: "#5C6B5E" }}>Nothing logged yet. Search above or tap a suggestion to start the day.</div>
           )}
@@ -1384,17 +1548,23 @@ function VegCalorieTracker() {
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ fontWeight: 600, fontSize: 14 }}>{x.cal}</span>
-                        <button onClick={() => setCopyMenuFor(copyMenuFor === x.id ? null : x.id)} title="Copy to another meal" style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "4px 6px", fontSize: 15 }}>⧉</button>
+                        <button onClick={() => { setCopyMenuFor(copyMenuFor === x.id ? null : x.id); setCopyQty(1); }} title="Copy to another meal" style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "4px 6px", fontSize: 15 }}>⧉</button>
                         <button onClick={() => removeFood(x.id)} title="Remove" style={{ ...S.btn, background: "transparent", color: "#C25E3A", padding: "4px 6px", fontSize: 16 }}>×</button>
                       </div>
                     </div>
                     {copyMenuFor === x.id && (
                       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center", background: "#F4F7F0", borderRadius: 10, padding: "8px 10px" }}>
-                        <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600 }}>Copy to:</span>
+                        <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600 }}>×</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <button onClick={() => setCopyQty((q) => Math.max(r1(q - 0.5), 0.5))} style={{ ...S.btn, background: "#E3E9DE", padding: "4px 10px" }}>−</button>
+                          <span style={{ minWidth: 28, textAlign: "center", fontWeight: 700, fontSize: 14 }}>{copyQty}</span>
+                          <button onClick={() => setCopyQty((q) => r1(q + 0.5))} style={{ ...S.btn, background: "#E3E9DE", padding: "4px 10px" }}>+</button>
+                        </div>
+                        <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600, marginLeft: 4 }}>→ copy to:</span>
                         {MEALS.filter((mm) => mm.id !== x.meal).map((mm) => (
-                          <button key={mm.id} onClick={() => copyToMeal(x, mm.id)} style={S.chip(false)}>{mm.label}</button>
+                          <button key={mm.id} onClick={() => copyToMeal(x, mm.id, copyQty)} style={S.chip(false)}>{mm.label}</button>
                         ))}
-                        <button onClick={() => setCopyMenuFor(null)} style={{ ...S.btn, background: "transparent", color: "#8FA88A", padding: "4px 6px", marginLeft: "auto" }}>Cancel</button>
+                        <button onClick={() => { setCopyMenuFor(null); setCopyQty(1); }} style={{ ...S.btn, background: "transparent", color: "#8FA88A", padding: "4px 6px", marginLeft: "auto" }}>Cancel</button>
                       </div>
                     )}
                   </div>
@@ -1409,10 +1579,72 @@ function VegCalorieTracker() {
           )}
         </div>
 
+        {/* History / trends */}
+        <div style={S.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={S.label}>History &amp; trends</div>
+            <button onClick={() => setShowHistory(!showHistory)} style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "4px 0" }}>{showHistory ? "Hide" : "Show"}</button>
+          </div>
+          {showHistory && (() => {
+            // Build last 14 days of totals from allLogs
+            const rows = [];
+            for (let i = 0; i < 14; i++) {
+              const d = new Date(date + "T12:00:00");
+              d.setDate(d.getDate() - i);
+              const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+              const items = allLogs[key] || [];
+              if (items.length === 0 && i !== 0) continue;
+              const t = items.reduce((s, x) => ({ cal: s.cal + x.cal, p: s.p + x.p, fb: s.fb + (x.fb || 0) }), { cal: 0, p: 0, fb: 0 });
+              rows.push({ key, label: d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }), ...t, isToday: i === 0 });
+            }
+            const logged = rows.filter((r) => r.cal > 0);
+            if (logged.length === 0) return <div style={{ fontSize: 13, color: "#5C6B5E", marginTop: 10 }}>No history yet — your logged days will show up here.</div>;
+            const avg = (arr) => Math.round(arr.reduce((s, x) => s + x, 0) / arr.length);
+            const avgCal = avg(logged.map((r) => r.cal));
+            const avgP = avg(logged.map((r) => r.p));
+            const maxCal = Math.max(...logged.map((r) => r.cal), goal);
+            return (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13, color: "#5C6B5E", marginBottom: 12 }}>
+                  <span>{logged.length}-day avg: <b style={{ color: "#182420" }}>{avgCal} kcal</b></span>
+                  <span>Avg protein: <b style={{ color: "#182420" }}>{avgP}g</b></span>
+                  <span>Goal: <b style={{ color: "#182420" }}>{goal}</b></span>
+                </div>
+                {rows.map((r) => {
+                  const pct = Math.min((r.cal / maxCal) * 100, 100);
+                  const goalPct = Math.min((goal / maxCal) * 100, 100);
+                  const over = r.cal > goal;
+                  return (
+                    <div key={r.key} style={{ marginBottom: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 2 }}>
+                        <span style={{ color: r.isToday ? "#2C5E3F" : "#5C6B5E", fontWeight: r.isToday ? 700 : 400 }}>{r.label}{r.isToday ? " · today" : ""}</span>
+                        <span style={{ color: "#5C6B5E" }}>{r.cal ? `${r.cal} kcal · ${r1(r.p)}g P` : "—"}</span>
+                      </div>
+                      <div style={{ position: "relative", height: 8, background: "#E3E9DE", borderRadius: 4 }}>
+                        {r.cal > 0 && <div style={{ height: 8, width: `${pct}%`, background: over ? "#C25E3A" : "#2C5E3F", borderRadius: 4 }} />}
+                        <div style={{ position: "absolute", top: -2, left: `${goalPct}%`, width: 2, height: 12, background: "#182420", opacity: 0.4 }} title="goal" />
+                      </div>
+                    </div>
+                  );
+                })}
+                <div style={{ fontSize: 11, color: "#8FA88A", marginTop: 8 }}>Bars show daily calories; the dark line marks your goal. Red means over goal.</div>
+              </div>
+            );
+          })()}
+        </div>
+
         <div style={{ textAlign: "center", fontSize: 12, color: "#8FA88A" }}>
           Data saves locally and, when connected, to greenplate-data.json in your Google Drive. Calorie values are typical estimates; the recommendation uses the Mifflin-St Jeor equation and is a starting point, not medical advice.
         </div>
       </div>
+
+      {/* Undo toast */}
+      {undoStack && (
+        <div style={{ position: "fixed", left: "50%", bottom: 24, transform: "translateX(-50%)", background: "#182420", color: "#fff", borderRadius: 12, padding: "12px 16px", display: "flex", alignItems: "center", gap: 16, boxShadow: "0 6px 24px rgba(0,0,0,0.25)", zIndex: 100, fontFamily: "Inter, sans-serif", fontSize: 14, maxWidth: "90vw" }}>
+          <span>Removed {undoStack.entry.name}</span>
+          <button onClick={undoDelete} style={{ border: "none", background: "transparent", color: "#E9A23B", fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 14 }}>Undo</button>
+        </div>
+      )}
     </div>
   );
 }
