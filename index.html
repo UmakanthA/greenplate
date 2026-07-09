@@ -432,6 +432,7 @@ function VegCalorieTracker() {
   const [showImport, setShowImport] = useState(false);
   const [dayText, setDayText] = useState("");
   const [importMsg, setImportMsg] = useState(null);
+  const [copyMenuFor, setCopyMenuFor] = useState(null); // id of item whose copy menu is open
   const fileInputRef = useRef(null);
   const [profile, setProfile] = useState({ heightCm: "", weightKg: "", age: "", sex: "male", activity: "moderate", target: "maintain", fasting: true });
   const [showProfile, setShowProfile] = useState(false);
@@ -692,6 +693,12 @@ function VegCalorieTracker() {
   const removeSaved = (name) => setSavedProducts((sp) => sp.filter((x) => x.name !== name));
 
   const removeFood = (id) => setLog((l) => l.filter((x) => x.id !== id));
+
+  // Copy an already-logged item into another meal, same quantity/macros
+  const copyToMeal = (item, targetMeal) => {
+    setLog((l) => [...l, { ...item, meal: targetMeal, id: Date.now() + Math.random() }]);
+    setCopyMenuFor(null);
+  };
 
   /* ---------- Quick day import: parse loose totals text ---------- */
   // Accepts things like "1850 cal, 95 protein, 24 fiber" / "1850 kcal 95p 24f"
@@ -1356,15 +1363,27 @@ function VegCalorieTracker() {
                   <span style={{ fontSize: 12, color: used > budget ? "#C25E3A" : "#5C6B5E" }}>{used} / {budget} kcal</span>
                 </div>
                 {items.map((x) => (
-                  <div key={x.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #EDF1EA" }}>
-                    <div>
-                      <div style={{ fontWeight: 500, fontSize: 14 }}>{x.name} <span style={{ color: "#8FA88A", fontWeight: 400 }}>· {x.qtyLabel}</span></div>
-                      <div style={{ fontSize: 12, color: "#5C6B5E" }}>{x.p}g P · {x.c}g C · {x.f}g F · {x.fb}g fiber</div>
+                  <div key={x.id} style={{ padding: "10px 0", borderBottom: "1px solid #EDF1EA" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontWeight: 500, fontSize: 14 }}>{x.name} <span style={{ color: "#8FA88A", fontWeight: 400 }}>· {x.qtyLabel}</span></div>
+                        <div style={{ fontSize: 12, color: "#5C6B5E" }}>{x.p}g P · {x.c}g C · {x.f}g F · {x.fb}g fiber</div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontWeight: 600, fontSize: 14 }}>{x.cal}</span>
+                        <button onClick={() => setCopyMenuFor(copyMenuFor === x.id ? null : x.id)} title="Copy to another meal" style={{ ...S.btn, background: "transparent", color: "#2C5E3F", padding: "4px 6px", fontSize: 15 }}>⧉</button>
+                        <button onClick={() => removeFood(x.id)} title="Remove" style={{ ...S.btn, background: "transparent", color: "#C25E3A", padding: "4px 6px", fontSize: 16 }}>×</button>
+                      </div>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <span style={{ fontWeight: 600, fontSize: 14 }}>{x.cal}</span>
-                      <button onClick={() => removeFood(x.id)} style={{ ...S.btn, background: "transparent", color: "#C25E3A", padding: "4px 6px", fontSize: 16 }}>×</button>
-                    </div>
+                    {copyMenuFor === x.id && (
+                      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center", background: "#F4F7F0", borderRadius: 10, padding: "8px 10px" }}>
+                        <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600 }}>Copy to:</span>
+                        {MEALS.filter((mm) => mm.id !== x.meal).map((mm) => (
+                          <button key={mm.id} onClick={() => copyToMeal(x, mm.id)} style={S.chip(false)}>{mm.label}</button>
+                        ))}
+                        <button onClick={() => setCopyMenuFor(null)} style={{ ...S.btn, background: "transparent", color: "#8FA88A", padding: "4px 6px", marginLeft: "auto" }}>Cancel</button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
