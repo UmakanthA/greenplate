@@ -443,6 +443,8 @@ function VegCalorieTracker() {
   const [weights, setWeights] = useState([]);
   const [weightInput, setWeightInput] = useState("");
   const [water, setWater] = useState({}); // { 'YYYY-MM-DD': glasses }
+  const [chia, setChia] = useState({ enabled: true, perGlass: false, cal: 60, p: 3, fb: 5 }); // chia-in-water config
+  const [showChiaCfg, setShowChiaCfg] = useState(false);
   const [templates, setTemplates] = useState([]); // [{ name, items: [logEntry...] }]
   const [showTemplates, setShowTemplates] = useState(false);
   const [tmplName, setTmplName] = useState("");
@@ -494,6 +496,7 @@ function VegCalorieTracker() {
     savedProducts,
     water,
     templates,
+    chia,
     updatedAt: Date.now(),
   });
 
@@ -509,6 +512,7 @@ function VegCalorieTracker() {
     if (d.savedProducts) setSavedProducts(d.savedProducts);
     if (d.water) setWater(d.water);
     if (d.templates) setTemplates(d.templates);
+    if (d.chia) setChia(d.chia);
   }
 
   /* ---------- Persist locally + schedule Drive push on any change ---------- */
@@ -521,7 +525,7 @@ function VegCalorieTracker() {
       clearTimeout(pushTimerRef.current);
       pushTimerRef.current = setTimeout(() => pushToDrive(blob), 2000);
     }
-  }, [goal, mode, profile, allLogs, weights, savedProducts, water, templates, loaded]);
+  }, [goal, mode, profile, allLogs, weights, savedProducts, water, templates, chia, loaded]);
 
   /* ---------- Google Drive ---------- */
   function initTokenClient() {
@@ -776,6 +780,18 @@ function VegCalorieTracker() {
   /* ---------- Water ---------- */
   const waterToday = water[date] || 0;
   const setWaterToday = (n) => setWater((w) => ({ ...w, [date]: Math.max(n, 0) }));
+
+  // Add a glass; if chia is enabled and set to per-glass, log a chia entry too
+  const addGlassWithChia = (withChia) => {
+    setWaterToday(waterToday + 1);
+    if (withChia) {
+      setLog((l) => [...l, {
+        name: "Chia seeds (in water)", qtyLabel: "1 glass", meal: defaultMealNow(),
+        cal: Math.round(chia.cal), p: r1(chia.p), c: 0, f: 0, fb: r1(chia.fb),
+        id: Date.now() + Math.random(),
+      }]);
+    }
+  };
 
   // Copy an already-logged item into another meal, scaling by a servings multiplier
   const copyToMeal = (item, targetMeal, qty = 1) => {
@@ -1169,8 +1185,42 @@ function VegCalorieTracker() {
               <button key={i} onClick={() => setWaterToday(i + 1 === waterToday ? i : i + 1)} title={`${i + 1} glasses`}
                 style={{ width: 30, height: 38, borderRadius: "4px 4px 8px 8px", border: "2px solid " + (i < waterToday ? "#2C5E3F" : "#C9D5C3"), background: i < waterToday ? "#2C5E3F" : "transparent", cursor: "pointer", transition: "all .15s" }} />
             ))}
-            <button onClick={() => setWaterToday(waterToday + 1)} style={{ ...S.btn, background: "#E3E9DE", color: "#182420", padding: "8px 12px", marginLeft: 4 }}>+ glass</button>
           </div>
+          {/* Add-glass buttons — plain or with chia */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            <button onClick={() => addGlassWithChia(false)} style={{ ...S.btn, background: "#E3E9DE", color: "#182420", padding: "8px 14px" }}>+ Glass</button>
+            {chia.enabled && (
+              <button onClick={() => addGlassWithChia(true)} style={{ ...S.btn, background: "#2C5E3F", color: "#fff", padding: "8px 14px" }}>
+                + Glass with chia <span style={{ opacity: 0.8, fontWeight: 400 }}>(+{Math.round(chia.cal)} kcal · {r1(chia.p)}g P · {r1(chia.fb)}g fiber)</span>
+              </button>
+            )}
+            <button onClick={() => setShowChiaCfg(!showChiaCfg)} style={{ ...S.btn, background: "transparent", color: "#8FA88A", padding: "8px 6px", fontSize: 13 }}>
+              {showChiaCfg ? "Hide chia settings" : "Chia settings"}
+            </button>
+          </div>
+          {chia.enabled && (
+            <div style={{ fontSize: 12, color: "#8FA88A", marginTop: 8 }}>
+              "With chia" adds the chia macros to your food log for today. On a heavy day, just tap plain "+ Glass" to skip it.
+            </div>
+          )}
+          {showChiaCfg && (
+            <div style={{ marginTop: 12, padding: "12px 14px", background: "#F4F7F0", borderRadius: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 10 }}>
+                <input type="checkbox" checked={chia.enabled} onChange={(e) => setChia({ ...chia, enabled: e.target.checked })} style={{ width: 16, height: 16 }} />
+                Offer a "with chia" option on water
+              </label>
+              {chia.enabled && (
+                <div>
+                  <div style={{ fontSize: 12, color: "#5C6B5E", marginBottom: 8 }}>Set your chia macros per glass (adjust to your actual amount — 2 tsp ≈ 40 kcal, 2 tbsp ≈ 140 kcal):</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <div><div style={{ fontSize: 10, color: "#5C6B5E", fontWeight: 600 }}>kcal</div><input style={{ ...S.input, width: 80, padding: "8px 10px" }} type="number" value={chia.cal} onChange={(e) => setChia({ ...chia, cal: parseFloat(e.target.value) || 0 })} /></div>
+                    <div><div style={{ fontSize: 10, color: "#5C6B5E", fontWeight: 600 }}>protein g</div><input style={{ ...S.input, width: 80, padding: "8px 10px" }} type="number" value={chia.p} onChange={(e) => setChia({ ...chia, p: parseFloat(e.target.value) || 0 })} /></div>
+                    <div><div style={{ fontSize: 10, color: "#5C6B5E", fontWeight: 600 }}>fiber g</div><input style={{ ...S.input, width: 80, padding: "8px 10px" }} type="number" value={chia.fb} onChange={(e) => setChia({ ...chia, fb: parseFloat(e.target.value) || 0 })} /></div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Weight log */}
@@ -1560,9 +1610,11 @@ function VegCalorieTracker() {
                           <span style={{ minWidth: 28, textAlign: "center", fontWeight: 700, fontSize: 14 }}>{copyQty}</span>
                           <button onClick={() => setCopyQty((q) => r1(q + 0.5))} style={{ ...S.btn, background: "#E3E9DE", padding: "4px 10px" }}>+</button>
                         </div>
-                        <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600, marginLeft: 4 }}>→ copy to:</span>
-                        {MEALS.filter((mm) => mm.id !== x.meal).map((mm) => (
-                          <button key={mm.id} onClick={() => copyToMeal(x, mm.id, copyQty)} style={S.chip(false)}>{mm.label}</button>
+                        <span style={{ fontSize: 12, color: "#5C6B5E", fontWeight: 600, marginLeft: 4 }}>→ add to:</span>
+                        {MEALS.map((mm) => (
+                          <button key={mm.id} onClick={() => copyToMeal(x, mm.id, copyQty)} style={S.chip(mm.id === x.meal)}>
+                            {mm.label}{mm.id === x.meal ? " (here)" : ""}
+                          </button>
                         ))}
                         <button onClick={() => { setCopyMenuFor(null); setCopyQty(1); }} style={{ ...S.btn, background: "transparent", color: "#8FA88A", padding: "4px 6px", marginLeft: "auto" }}>Cancel</button>
                       </div>
